@@ -314,30 +314,59 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	// Output results
-	fmt.Printf("\nTop %d meeting times with least conflicts:\n", len(filteredSlots))
-	fmt.Println(strings.Repeat("-", 80))
+	// === BEST OPTIONS SUMMARY ===
+	fmt.Println("\n" + strings.Repeat("=", 80))
+	fmt.Println("📅 BEST MEETING TIME OPTIONS")
+	fmt.Println(strings.Repeat("=", 80))
 
-	for i, slot := range filteredSlots {
-		fmt.Printf("\n%d. %s - %s\n",
-			i+1,
-			slot.TimeSlot.Start.Format("Mon, Jan 2, 2006 at 15:04"),
-			slot.TimeSlot.End.Format("15:04"),
-		)
+	// Group slots by conflict level
+	conflictGroups := optimizer.GroupSlotsByConflictLevel(filteredSlots)
 
-		if slot.UnavailableCount == 0 {
-			fmt.Printf("   ✅ All attendees available!\n")
-		} else {
-			fmt.Printf("   ⚠️  %d/%d attendees unavailable (%.1f%% conflict)\n",
-				slot.UnavailableCount,
-				len(availabilities),
-				slot.ConflictPercentage,
+	// Show best options first
+	if len(conflictGroups["no-conflicts"]) > 0 {
+		fmt.Printf("\n🏆 PERFECT SLOTS (All attendees available):\n")
+		fmt.Printf("   Found %d perfect slot(s)\n\n", len(conflictGroups["no-conflicts"]))
+
+		// Show up to 3 best no-conflict slots
+		maxShow := 3
+		if len(conflictGroups["no-conflicts"]) < maxShow {
+			maxShow = len(conflictGroups["no-conflicts"])
+		}
+
+		for i := 0; i < maxShow; i++ {
+			slot := conflictGroups["no-conflicts"][i]
+			fmt.Printf("   ⭐ %s - %s\n",
+				slot.TimeSlot.Start.Format("Mon, Jan 2 at 15:04"),
+				slot.TimeSlot.End.Format("15:04"),
 			)
-			fmt.Printf("   Unavailable: %s\n", strings.Join(slot.UnavailableEmails, ", "))
+		}
+		if len(conflictGroups["no-conflicts"]) > 3 {
+			fmt.Printf("   ... and %d more perfect slots\n", len(conflictGroups["no-conflicts"])-3)
 		}
 	}
 
+	// Show slots with minimal conflicts
+	if len(conflictGroups["low-conflicts"]) > 0 {
+		fmt.Printf("\n✅ GOOD OPTIONS (1-25%% conflicts):\n")
+		fmt.Printf("   Found %d slot(s) with minimal conflicts\n", len(conflictGroups["low-conflicts"]))
+
+		// Show best one from this group
+		bestLowConflict := conflictGroups["low-conflicts"][0]
+		for _, slot := range conflictGroups["low-conflicts"] {
+			if slot.ConflictPercentage < bestLowConflict.ConflictPercentage {
+				bestLowConflict = slot
+			}
+		}
+		fmt.Printf("   Best: %s - %s (%.0f%% conflict)\n",
+			bestLowConflict.TimeSlot.Start.Format("Mon, Jan 2 at 15:04"),
+			bestLowConflict.TimeSlot.End.Format("15:04"),
+			bestLowConflict.ConflictPercentage,
+		)
+	}
+
+	// === SUMMARY BY DAY ===
 	fmt.Println("\n" + strings.Repeat("-", 80))
+	fmt.Printf("\n📊 AVAILABILITY SUMMARY BY DAY:\n\n")
 
 	// Group by day for summary
 	grouped := optimizer.GroupSlotsByDay(filteredSlots)
@@ -347,12 +376,93 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 	for day := range grouped {
 		days = append(days, day)
 	}
-	sort.Strings(days) // sorts in YYYY-MM-DD format naturally
+	sort.Strings(days)
 
-	fmt.Printf("\nSummary by day:\n")
 	for _, day := range days {
 		slots := grouped[day]
 		dayTime, _ := time.Parse("2006-01-02", day)
-		fmt.Printf("  %s: %d potential slots\n", dayTime.Format("Mon, Jan 2"), len(slots))
+
+		bestConflict, avgConflict, perfectCount := optimizer.GetDaySummaryStats(slots)
+
+		dayName := dayTime.Format("Mon, Jan 2")
+		fmt.Printf("📆 %s\n", dayName)
+		fmt.Printf("   Total slots: %d | Perfect slots: %d | Best conflict: %.0f%% | Avg: %.0f%%\n",
+			len(slots), perfectCount, bestConflict, avgConflict)
+
+		// Show time ranges for this day
+		if len(slots) > 0 {
+			// Find earliest and latest slots
+			earliest := slots[0].TimeSlot.Start
+			latest := slots[0].TimeSlot.End
+			for _, s := range slots {
+				if s.TimeSlot.Start.Before(earliest) {
+					earliest = s.TimeSlot.Start
+				}
+				if s.TimeSlot.End.After(latest) {
+					latest = s.TimeSlot.End
+				}
+			}
+			fmt.Printf("   Time range: %s - %s\n",
+				earliest.Format("15:04"),
+				latest.Format("15:04"))
+		}
+		fmt.Println()
 	}
+
+	// === DETAILED TIME SLOTS ===
+	fmt.Println(strings.Repeat("-", 80))
+	fmt.Printf("\n📋 DETAILED TIME SLOTS (Top %d):\n", len(filteredSlots))
+	fmt.Println(strings.Repeat("-", 80))
+
+	for i, slot := range filteredSlots {
+		fmt.Printf("\n%d. %s - %s",
+			i+1,
+			slot.TimeSlot.Start.Format("Mon, Jan 2, 2006 at 15:04"),
+			slot.TimeSlot.End.Format("15:04"),
+		)
+
+		if slot.UnavailableCount == 0 {
+			fmt.Printf(" ✅ Perfect - All attendees available!\n")
+		} else {
+			conflictIcon := "⚠️"
+			if slot.ConflictPercentage > 50 {
+				conflictIcon = "❌"
+			} else if slot.ConflictPercentage <= 25 {
+				conflictIcon = "🟡"
+			}
+
+			fmt.Printf(" %s %.0f%% conflict\n",
+				conflictIcon,
+				slot.ConflictPercentage,
+			)
+			fmt.Printf("   Unavailable (%d/%d): %s\n",
+				slot.UnavailableCount,
+				len(availabilities),
+				strings.Join(slot.UnavailableEmails, ", "))
+		}
+	}
+
+	// === QUICK RECOMMENDATION ===
+	fmt.Println("\n" + strings.Repeat("=", 80))
+	fmt.Println("💡 RECOMMENDATION:")
+	if len(conflictGroups["no-conflicts"]) > 0 {
+		bestSlot := conflictGroups["no-conflicts"][0]
+		fmt.Printf("   Book: %s - %s\n",
+			bestSlot.TimeSlot.Start.Format("Monday, January 2 at 15:04"),
+			bestSlot.TimeSlot.End.Format("15:04"),
+		)
+		fmt.Println("   This slot has perfect attendance with all attendees available!")
+	} else if len(filteredSlots) > 0 {
+		bestSlot := filteredSlots[0]
+		fmt.Printf("   Best option: %s - %s\n",
+			bestSlot.TimeSlot.Start.Format("Monday, January 2 at 15:04"),
+			bestSlot.TimeSlot.End.Format("15:04"),
+		)
+		fmt.Printf("   Only %.0f%% conflict rate (%d/%d unavailable)\n",
+			bestSlot.ConflictPercentage,
+			bestSlot.UnavailableCount,
+			len(availabilities),
+		)
+	}
+	fmt.Println(strings.Repeat("=", 80))
 }

@@ -119,3 +119,54 @@ func GroupSlotsByDay(slots []MeetingSlot) map[string][]MeetingSlot {
 
 	return grouped
 }
+
+// GroupSlotsByConflictLevel groups slots by conflict percentage ranges
+func GroupSlotsByConflictLevel(slots []MeetingSlot) map[string][]MeetingSlot {
+	groups := map[string][]MeetingSlot{
+		"no-conflicts":   {},
+		"low-conflicts":  {}, // 1-25%
+		"med-conflicts":  {}, // 26-50%
+		"high-conflicts": {}, // 51-75%
+		"very-high":      {}, // 76-100%
+	}
+
+	for _, slot := range slots {
+		switch {
+		case slot.ConflictPercentage == 0:
+			groups["no-conflicts"] = append(groups["no-conflicts"], slot)
+		case slot.ConflictPercentage <= 25:
+			groups["low-conflicts"] = append(groups["low-conflicts"], slot)
+		case slot.ConflictPercentage <= 50:
+			groups["med-conflicts"] = append(groups["med-conflicts"], slot)
+		case slot.ConflictPercentage <= 75:
+			groups["high-conflicts"] = append(groups["high-conflicts"], slot)
+		default:
+			groups["very-high"] = append(groups["very-high"], slot)
+		}
+	}
+
+	return groups
+}
+
+// GetDaySummaryStats calculates statistics for slots on a given day
+func GetDaySummaryStats(slots []MeetingSlot) (bestConflict float64, avgConflict float64, noConflictCount int) {
+	if len(slots) == 0 {
+		return 100, 100, 0
+	}
+
+	bestConflict = 100.0
+	totalConflict := 0.0
+
+	for _, slot := range slots {
+		if slot.ConflictPercentage < bestConflict {
+			bestConflict = slot.ConflictPercentage
+		}
+		if slot.ConflictPercentage == 0 {
+			noConflictCount++
+		}
+		totalConflict += slot.ConflictPercentage
+	}
+
+	avgConflict = totalConflict / float64(len(slots))
+	return
+}

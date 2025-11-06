@@ -11,8 +11,8 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
-	"google.golang.org/api/calendar/v3"
 	directory "google.golang.org/api/admin/directory/v1"
+	"google.golang.org/api/calendar/v3"
 	"google.golang.org/api/option"
 )
 

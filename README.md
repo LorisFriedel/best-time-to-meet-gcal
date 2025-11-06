@@ -167,26 +167,59 @@ Lunch break: 12:00 - 13:00
 Timezone: America/New_York
 Exclude weekends: true
 
-Top 10 meeting times with least conflicts:
+================================================================================
+📅 BEST MEETING TIME OPTIONS
+================================================================================
+
+🏆 PERFECT SLOTS (All attendees available):
+   Found 3 perfect slot(s)
+
+   ⭐ Mon, Jan 15 at 14:00 - 15:00
+   ⭐ Mon, Jan 15 at 15:00 - 16:00
+   ⭐ Wed, Jan 17 at 09:30 - 10:30
+
+✅ GOOD OPTIONS (1-25% conflicts):
+   Found 5 slot(s) with minimal conflicts
+   Best: Tue, Jan 16 at 10:00 - 11:00 (25% conflict)
+
 --------------------------------------------------------------------------------
 
-1. Mon, Jan 15, 2024 at 14:00 - 15:00
-   ✅ All attendees available!
+📊 AVAILABILITY SUMMARY BY DAY:
 
-2. Tue, Jan 16, 2024 at 10:00 - 11:00
-   ⚠️  1/3 attendees unavailable (33.3% conflict)
-   Unavailable: bob@company.com
+📆 Mon, Jan 15
+   Total slots: 4 | Perfect slots: 2 | Best conflict: 0% | Avg: 25%
+   Time range: 09:00 - 16:00
 
-3. Wed, Jan 17, 2024 at 15:30 - 16:30
-   ⚠️  1/3 attendees unavailable (33.3% conflict)
-   Unavailable: charlie@company.com
+📆 Tue, Jan 16
+   Total slots: 3 | Perfect slots: 0 | Best conflict: 25% | Avg: 33%
+   Time range: 10:00 - 16:30
+
+📆 Wed, Jan 17
+   Total slots: 3 | Perfect slots: 1 | Best conflict: 0% | Avg: 22%
+   Time range: 09:30 - 16:00
 
 --------------------------------------------------------------------------------
 
-Summary by day:
-  Mon, Jan 15: 3 potential slots
-  Tue, Jan 16: 4 potential slots
-  Wed, Jan 17: 3 potential slots
+📋 DETAILED TIME SLOTS (Top 10):
+--------------------------------------------------------------------------------
+
+1. Mon, Jan 15, 2024 at 14:00 - 15:00 ✅ Perfect - All attendees available!
+
+2. Mon, Jan 15, 2024 at 15:00 - 16:00 ✅ Perfect - All attendees available!
+
+3. Wed, Jan 17, 2024 at 09:30 - 10:30 ✅ Perfect - All attendees available!
+
+4. Tue, Jan 16, 2024 at 10:00 - 11:00 🟡 25% conflict
+   Unavailable (1/3): bob@company.com
+
+5. Wed, Jan 17, 2024 at 15:30 - 16:30 ⚠️ 33% conflict
+   Unavailable (1/3): charlie@company.com
+
+================================================================================
+💡 RECOMMENDATION:
+   Book: Monday, January 15 at 14:00 - 15:00
+   This slot has perfect attendance with all attendees available!
+================================================================================
 ```
 
 ## Mailing List Support
