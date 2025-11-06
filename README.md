@@ -219,6 +219,7 @@ Exclude weekends: true
 💡 RECOMMENDATION:
    Book: Monday, January 15 at 14:00 - 15:00
    This slot has perfect attendance with all attendees available!
+   (This matches the best option shown above)
 ================================================================================
 ```
 

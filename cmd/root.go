@@ -445,24 +445,51 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 	// === QUICK RECOMMENDATION ===
 	fmt.Println("\n" + strings.Repeat("=", 80))
 	fmt.Println("💡 RECOMMENDATION:")
-	if len(conflictGroups["no-conflicts"]) > 0 {
-		bestSlot := conflictGroups["no-conflicts"][0]
+
+	// Find the actual best slot across all filtered slots
+	var bestSlot optimizer.MeetingSlot
+	if len(filteredSlots) > 0 {
+		bestSlot = filteredSlots[0]
+		for _, slot := range filteredSlots {
+			// First priority: lower conflict percentage
+			if slot.ConflictPercentage < bestSlot.ConflictPercentage {
+				bestSlot = slot
+			} else if slot.ConflictPercentage == bestSlot.ConflictPercentage {
+				// Second priority: earlier time if conflict percentage is the same
+				if slot.TimeSlot.Start.Before(bestSlot.TimeSlot.Start) {
+					bestSlot = slot
+				}
+			}
+		}
+
 		fmt.Printf("   Book: %s - %s\n",
 			bestSlot.TimeSlot.Start.Format("Monday, January 2 at 15:04"),
 			bestSlot.TimeSlot.End.Format("15:04"),
 		)
-		fmt.Println("   This slot has perfect attendance with all attendees available!")
-	} else if len(filteredSlots) > 0 {
-		bestSlot := filteredSlots[0]
-		fmt.Printf("   Best option: %s - %s\n",
-			bestSlot.TimeSlot.Start.Format("Monday, January 2 at 15:04"),
-			bestSlot.TimeSlot.End.Format("15:04"),
-		)
-		fmt.Printf("   Only %.0f%% conflict rate (%d/%d unavailable)\n",
-			bestSlot.ConflictPercentage,
-			bestSlot.UnavailableCount,
-			len(availabilities),
-		)
+
+		if bestSlot.UnavailableCount == 0 {
+			fmt.Println("   This slot has perfect attendance with all attendees available!")
+		} else {
+			fmt.Printf("   Only %.0f%% conflict rate (%d/%d unavailable)\n",
+				bestSlot.ConflictPercentage,
+				bestSlot.UnavailableCount,
+				len(availabilities),
+			)
+
+			// If this matches what we showed in the GOOD OPTIONS section, mention it
+			if len(conflictGroups["low-conflicts"]) > 0 {
+				bestLowConflict := conflictGroups["low-conflicts"][0]
+				for _, slot := range conflictGroups["low-conflicts"] {
+					if slot.ConflictPercentage < bestLowConflict.ConflictPercentage {
+						bestLowConflict = slot
+					}
+				}
+				if bestSlot.TimeSlot.Start.Equal(bestLowConflict.TimeSlot.Start) &&
+					bestSlot.ConflictPercentage == bestLowConflict.ConflictPercentage {
+					fmt.Println("   (This matches the best option shown above)")
+				}
+			}
+		}
 	}
 	fmt.Println(strings.Repeat("=", 80))
 }
