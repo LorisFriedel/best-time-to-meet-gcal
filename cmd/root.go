@@ -342,10 +342,8 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 	fmt.Printf("\nAttendees by timezone:\n")
 	for tz, emails := range tzMap {
 		fmt.Printf("  • %s: %d attendee(s)\n", tz, len(emails))
-		if len(emails) <= 3 {
-			fmt.Printf("    %s\n", strings.Join(emails, ", "))
-		} else {
-			fmt.Printf("    %s, ... and %d more\n", strings.Join(emails[:3], ", "), len(emails)-3)
+		for _, email := range emails {
+			fmt.Printf("    - %s\n", email)
 		}
 	}
 	fmt.Printf("\nWorking hours: %d:00 - %d:00 (in each attendee's local time)\n",
