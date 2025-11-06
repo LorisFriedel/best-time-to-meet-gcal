@@ -108,7 +108,8 @@ On first run, the tool will:
   --max-slots 10 \                                    # Max results to show (default: 10)
   --exclude-weekends \                                # Skip weekends (default: true)
   --max-conflicts 30 \                                # Max conflict % to show (default: 100)
-  --credentials "credentials.json"                    # Path to Google credentials
+  --credentials "credentials.json" \                  # Path to Google credentials
+  --debug                                             # Enable debug logging
 ```
 
 ### Using Configuration File
@@ -136,6 +137,22 @@ Then run with fewer command-line arguments:
   --emails "alice@company.com,bob@company.com" \
   --start "2024-01-15" \
   --end "2024-01-19"
+```
+
+## Logging and Debugging
+
+The tool uses structured logging with automatic pretty-printing when running in a terminal:
+- Normal mode: Shows only important information with colored output
+- Debug mode (`--debug`): Shows detailed information including API calls and calendar access
+
+When output is piped or redirected, JSON logging is used automatically for easy parsing.
+
+### Terminal Detection Issues
+
+If the tool doesn't detect your terminal correctly and shows JSON output instead of pretty printing, you can force pretty output by setting the `FORCE_PRETTY` environment variable:
+
+```bash
+FORCE_PRETTY=1 ./best-time-to-meet --emails "user@example.com" --start "2024-01-15" --end "2024-01-19"
 ```
 
 ## Output Example

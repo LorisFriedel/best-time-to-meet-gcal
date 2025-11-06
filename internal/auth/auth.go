@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"os"
 
+	"github.com/rs/zerolog/log"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/calendar/v3"
@@ -35,12 +35,12 @@ func getTokenFromWeb(config *oauth2.Config) *oauth2.Token {
 
 	var authCode string
 	if _, err := fmt.Scan(&authCode); err != nil {
-		log.Fatalf("Unable to read authorization code: %v", err)
+		log.Fatal().Err(err).Msg("Unable to read authorization code")
 	}
 
 	tok, err := config.Exchange(context.TODO(), authCode)
 	if err != nil {
-		log.Fatalf("Unable to retrieve token from web: %v", err)
+		log.Fatal().Err(err).Msg("Unable to retrieve token from web")
 	}
 	return tok
 }
@@ -59,10 +59,10 @@ func tokenFromFile(file string) (*oauth2.Token, error) {
 
 // Saves a token to a file path.
 func saveToken(path string, token *oauth2.Token) {
-	fmt.Printf("Saving credential file to: %s\n", path)
+	log.Info().Str("path", path).Msg("Saving credential file")
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
-		log.Fatalf("Unable to cache oauth token: %v", err)
+		log.Fatal().Err(err).Str("path", path).Msg("Unable to cache oauth token")
 	}
 	defer f.Close()
 	json.NewEncoder(f).Encode(token)

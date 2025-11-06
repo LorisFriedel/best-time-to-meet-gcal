@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"sort"
 	"strings"
@@ -11,7 +10,9 @@ import (
 	"github.com/LorisFriedel/find-best-meeting-time-google/internal/auth"
 	"github.com/LorisFriedel/find-best-meeting-time-google/internal/calendar"
 	"github.com/LorisFriedel/find-best-meeting-time-google/internal/directory"
+	"github.com/LorisFriedel/find-best-meeting-time-google/internal/logger"
 	"github.com/LorisFriedel/find-best-meeting-time-google/internal/optimizer"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -32,6 +33,7 @@ var (
 	maxSlots        int
 	excludeWeekends bool
 	maxConflicts    float64
+	debug           bool
 )
 
 var rootCmd = &cobra.Command{
@@ -69,6 +71,7 @@ func init() {
 	rootCmd.Flags().IntVarP(&maxSlots, "max-slots", "m", 10, "Maximum number of slots to display")
 	rootCmd.Flags().BoolVarP(&excludeWeekends, "exclude-weekends", "w", true, "Exclude weekends from search")
 	rootCmd.Flags().Float64VarP(&maxConflicts, "max-conflicts", "c", 100, "Maximum conflict percentage to display (0-100)")
+	rootCmd.Flags().BoolVar(&debug, "debug", false, "Enable debug logging")
 
 	// At least one of emails or mailing-lists is required
 	rootCmd.MarkFlagRequired("start")
@@ -89,6 +92,7 @@ func init() {
 	viper.BindPFlag("max_slots", rootCmd.Flags().Lookup("max-slots"))
 	viper.BindPFlag("exclude_weekends", rootCmd.Flags().Lookup("exclude-weekends"))
 	viper.BindPFlag("max_conflicts", rootCmd.Flags().Lookup("max-conflicts"))
+	viper.BindPFlag("debug", rootCmd.Flags().Lookup("debug"))
 }
 
 func initConfig() {
@@ -108,13 +112,16 @@ func initConfig() {
 }
 
 func runFindMeetingTime(cmd *cobra.Command, args []string) {
+	// Initialize logger
+	logger.Init(viper.GetBool("debug"))
+
 	// Parse inputs
 	emailsStr := viper.GetString("emails")
 	mailingListsStr := viper.GetString("mailing_lists")
 
 	// Check that at least one of emails or mailing-lists is provided
 	if emailsStr == "" && mailingListsStr == "" {
-		log.Fatal("At least one of --emails or --mailing-lists must be provided")
+		log.Fatal().Msg("At least one of --emails or --mailing-lists must be provided")
 	}
 
 	var allEmails []string
@@ -145,22 +152,22 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 			// Get Directory service
 			directoryService, err := auth.GetDirectoryService(viper.GetString("credentials"))
 			if err != nil {
-				log.Printf("Warning: Could not get Directory service for mailing list resolution: %v", err)
-				log.Printf("Treating mailing lists as individual emails")
+				log.Warn().Err(err).Msg("Could not get Directory service for mailing list resolution")
+				log.Warn().Msg("Treating mailing lists as individual emails")
 				allEmails = append(allEmails, mailingListsClean...)
 			} else {
 				// Check if we have proper access
 				if err := directory.CheckGroupAccess(directoryService); err != nil {
-					log.Printf("Warning: %v", err)
-					log.Printf("Treating mailing lists as individual emails")
+					log.Warn().Err(err).Msg("Group access check failed")
+					log.Warn().Msg("Treating mailing lists as individual emails")
 					allEmails = append(allEmails, mailingListsClean...)
 				} else {
 					// Resolve mailing list members
-					fmt.Printf("Resolving mailing lists...\n")
+					log.Info().Msg("Resolving mailing lists...")
 					resolvedEmails, err := directory.ResolveMemberEmails(directoryService, mailingListsClean)
 					if err != nil {
-						log.Printf("Warning: Error resolving mailing lists: %v", err)
-						log.Printf("Treating mailing lists as individual emails")
+						log.Warn().Err(err).Msg("Error resolving mailing lists")
+						log.Warn().Msg("Treating mailing lists as individual emails")
 						allEmails = append(allEmails, mailingListsClean...)
 					} else {
 						allEmails = append(allEmails, resolvedEmails...)
@@ -181,7 +188,7 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 	}
 
 	if len(emailList) == 0 {
-		log.Fatal("No valid email addresses found")
+		log.Fatal().Msg("No valid email addresses found")
 	}
 
 	// Handle timezone
@@ -193,42 +200,64 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 		var err error
 		loc, err = time.LoadLocation(tzName)
 		if err != nil {
-			log.Fatalf("Invalid timezone '%s': %v", tzName, err)
+			log.Fatal().Err(err).Str("timezone", tzName).Msg("Invalid timezone")
 		}
 	}
 
 	// Parse dates in the specified timezone
 	startTime, err := time.ParseInLocation("2006-01-02", viper.GetString("start"), loc)
 	if err != nil {
-		log.Fatalf("Invalid start date: %v", err)
+		log.Fatal().Err(err).Str("date", viper.GetString("start")).Msg("Invalid start date")
 	}
 
 	endTime, err := time.ParseInLocation("2006-01-02", viper.GetString("end"), loc)
 	if err != nil {
-		log.Fatalf("Invalid end date: %v", err)
+		log.Fatal().Err(err).Str("date", viper.GetString("end")).Msg("Invalid end date")
 	}
 
 	meetingDuration := time.Duration(viper.GetInt("duration")) * time.Minute
 
-	fmt.Printf("\nSearching for optimal meeting times...\n")
-	fmt.Printf("Attendees: %s\n", strings.Join(emailList, ", "))
-	fmt.Printf("Date range: %s to %s\n", startTime.Format("2006-01-02"), endTime.Format("2006-01-02"))
-	fmt.Printf("Meeting duration: %d minutes\n", viper.GetInt("duration"))
-	fmt.Printf("Working hours: %02d:00 - %02d:00\n", viper.GetInt("start_hour"), viper.GetInt("end_hour"))
-	fmt.Printf("Lunch break: %02d:00 - %02d:00\n", viper.GetInt("lunch_start_hour"), viper.GetInt("lunch_end_hour"))
-	fmt.Printf("Timezone: %s\n", loc.String())
-	fmt.Printf("Exclude weekends: %v\n\n", viper.GetBool("exclude_weekends"))
+	log.Info().Msg("Searching for optimal meeting times...")
+	log.Info().
+		Strs("attendees", emailList).
+		Str("start_date", startTime.Format("2006-01-02")).
+		Str("end_date", endTime.Format("2006-01-02")).
+		Int("duration_minutes", viper.GetInt("duration")).
+		Int("start_hour", viper.GetInt("start_hour")).
+		Int("end_hour", viper.GetInt("end_hour")).
+		Int("lunch_start_hour", viper.GetInt("lunch_start_hour")).
+		Int("lunch_end_hour", viper.GetInt("lunch_end_hour")).
+		Str("timezone", loc.String()).
+		Bool("exclude_weekends", viper.GetBool("exclude_weekends")).
+		Msg("Search parameters")
 
 	// Initialize Google Calendar service
 	service, err := auth.GetCalendarService(viper.GetString("credentials"))
 	if err != nil {
-		log.Fatalf("Failed to get calendar service: %v", err)
+		log.Fatal().Err(err).Msg("Failed to get calendar service")
 	}
 
 	// Get busy times for all attendees
 	availabilities, err := calendar.GetBusyTimes(service, emailList, startTime, endTime.Add(24*time.Hour))
 	if err != nil {
-		log.Fatalf("Failed to get busy times: %v", err)
+		log.Fatal().Err(err).Msg("Failed to get busy times")
+	}
+
+	log.Debug().
+		Int("requested_attendees", len(emailList)).
+		Int("available_calendars", len(availabilities)).
+		Msg("Calendar access summary")
+
+	for _, avail := range availabilities {
+		log.Debug().Str("email", avail.Email).Msg("Got calendar data")
+	}
+
+	// If we couldn't get calendar data for all attendees, show a warning
+	if len(availabilities) < len(emailList) {
+		log.Warn().
+			Int("accessible_calendars", len(availabilities)).
+			Int("requested_attendees", len(emailList)).
+			Msg("Could not access all requested calendars. Results are based only on accessible calendars.")
 	}
 
 	// Get potential meeting slots (working hours)
@@ -250,8 +279,24 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 		viper.GetInt("max_slots")*3, // Get more slots initially for filtering
 	)
 
+	log.Debug().
+		Int("total_slots", len(optimalSlots)).
+		Msg("Found optimal slots")
+
+	if len(optimalSlots) > 0 {
+		log.Debug().
+			Float64("first_slot_conflict_pct", optimalSlots[0].ConflictPercentage).
+			Float64("last_slot_conflict_pct", optimalSlots[len(optimalSlots)-1].ConflictPercentage).
+			Msg("Conflict percentage range")
+	}
+
 	// Filter by conflict threshold
 	filteredSlots := optimizer.FilterSlotsByThreshold(optimalSlots, viper.GetFloat64("max_conflicts"))
+
+	log.Debug().
+		Float64("max_conflicts_threshold", viper.GetFloat64("max_conflicts")).
+		Int("filtered_slots", len(filteredSlots)).
+		Msg("Filtered by conflict threshold")
 
 	// Limit to requested number of slots
 	if len(filteredSlots) > viper.GetInt("max_slots") {
@@ -269,7 +314,8 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	fmt.Printf("Top %d meeting times with least conflicts:\n", len(filteredSlots))
+	// Output results
+	fmt.Printf("\nTop %d meeting times with least conflicts:\n", len(filteredSlots))
 	fmt.Println(strings.Repeat("-", 80))
 
 	for i, slot := range filteredSlots {
@@ -284,7 +330,7 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 		} else {
 			fmt.Printf("   ⚠️  %d/%d attendees unavailable (%.1f%% conflict)\n",
 				slot.UnavailableCount,
-				len(emailList),
+				len(availabilities),
 				slot.ConflictPercentage,
 			)
 			fmt.Printf("   Unavailable: %s\n", strings.Join(slot.UnavailableEmails, ", "))

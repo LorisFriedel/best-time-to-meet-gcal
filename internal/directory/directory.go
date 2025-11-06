@@ -2,9 +2,9 @@ package directory
 
 import (
 	"fmt"
-	"log"
 	"strings"
 
+	"github.com/rs/zerolog/log"
 	directory "google.golang.org/api/admin/directory/v1"
 )
 
@@ -12,25 +12,25 @@ import (
 // and returns a list of individual member email addresses
 func ResolveMemberEmails(service *directory.Service, emails []string) ([]string, error) {
 	memberEmails := make(map[string]bool) // Use map to avoid duplicates
-	
+
 	for _, email := range emails {
 		email = strings.TrimSpace(email)
 		if email == "" {
 			continue
 		}
-		
+
 		// Check if this is a group email by trying to get its members
 		members, err := getGroupMembers(service, email)
 		if err != nil {
 			// If we can't get members, assume it's an individual email
-			log.Printf("Could not get members for %s (might be an individual email): %v", email, err)
+			log.Debug().Err(err).Str("email", email).Msg("Could not get members (might be an individual email)")
 			memberEmails[email] = true
 			continue
 		}
-		
+
 		// If we successfully got members, add them instead of the group
 		if len(members) > 0 {
-			log.Printf("Resolved group %s to %d members", email, len(members))
+			log.Info().Str("group", email).Int("member_count", len(members)).Msg("Resolved group")
 			for _, member := range members {
 				memberEmails[member] = true
 			}
@@ -39,13 +39,13 @@ func ResolveMemberEmails(service *directory.Service, emails []string) ([]string,
 			memberEmails[email] = true
 		}
 	}
-	
+
 	// Convert map to slice
 	result := make([]string, 0, len(memberEmails))
 	for email := range memberEmails {
 		result = append(result, email)
 	}
-	
+
 	return result, nil
 }
 
@@ -53,18 +53,18 @@ func ResolveMemberEmails(service *directory.Service, emails []string) ([]string,
 func getGroupMembers(service *directory.Service, groupEmail string) ([]string, error) {
 	var members []string
 	pageToken := ""
-	
+
 	for {
 		call := service.Members.List(groupEmail).MaxResults(200)
 		if pageToken != "" {
 			call = call.PageToken(pageToken)
 		}
-		
+
 		resp, err := call.Do()
 		if err != nil {
 			return nil, err
 		}
-		
+
 		for _, member := range resp.Members {
 			// Only add USER type members (not groups within groups)
 			if member.Type == "USER" {
@@ -73,19 +73,19 @@ func getGroupMembers(service *directory.Service, groupEmail string) ([]string, e
 				// Recursively get members of nested groups
 				nestedMembers, err := getGroupMembers(service, member.Email)
 				if err != nil {
-					log.Printf("Warning: Could not get members of nested group %s: %v", member.Email, err)
+					log.Warn().Err(err).Str("nested_group", member.Email).Msg("Could not get members of nested group")
 					continue
 				}
 				members = append(members, nestedMembers...)
 			}
 		}
-		
+
 		pageToken = resp.NextPageToken
 		if pageToken == "" {
 			break
 		}
 	}
-	
+
 	return members, nil
 }
 
