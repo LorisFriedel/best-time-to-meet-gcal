@@ -75,7 +75,7 @@ func FindOptimalMeetingSlots(
 		}
 	}
 
-	// Sort by number of conflicts (ascending)
+	// Sort by number of conflicts (ascending) to get the best slots first
 	sort.Slice(meetingSlots, func(i, j int) bool {
 		// Primary sort: fewer conflicts first
 		if meetingSlots[i].UnavailableCount != meetingSlots[j].UnavailableCount {

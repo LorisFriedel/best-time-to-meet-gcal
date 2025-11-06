@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -110,14 +111,14 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 	// Parse inputs
 	emailsStr := viper.GetString("emails")
 	mailingListsStr := viper.GetString("mailing_lists")
-	
+
 	// Check that at least one of emails or mailing-lists is provided
 	if emailsStr == "" && mailingListsStr == "" {
 		log.Fatal("At least one of --emails or --mailing-lists must be provided")
 	}
-	
+
 	var allEmails []string
-	
+
 	// Parse individual emails
 	if emailsStr != "" {
 		emails := strings.Split(emailsStr, ",")
@@ -128,7 +129,7 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 			}
 		}
 	}
-	
+
 	// Parse and resolve mailing lists
 	if mailingListsStr != "" {
 		mailingLists := strings.Split(mailingListsStr, ",")
@@ -139,7 +140,7 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 				mailingListsClean = append(mailingListsClean, ml)
 			}
 		}
-		
+
 		if len(mailingListsClean) > 0 {
 			// Get Directory service
 			directoryService, err := auth.GetDirectoryService(viper.GetString("credentials"))
@@ -168,7 +169,7 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 			}
 		}
 	}
-	
+
 	// Remove duplicates
 	emailMap := make(map[string]bool)
 	var emailList []string
@@ -178,7 +179,7 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 			emailList = append(emailList, email)
 		}
 	}
-	
+
 	if len(emailList) == 0 {
 		log.Fatal("No valid email addresses found")
 	}
@@ -257,6 +258,11 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 		filteredSlots = filteredSlots[:viper.GetInt("max_slots")]
 	}
 
+	// Sort the final results chronologically for calendar-style display
+	sort.Slice(filteredSlots, func(i, j int) bool {
+		return filteredSlots[i].TimeSlot.Start.Before(filteredSlots[j].TimeSlot.Start)
+	})
+
 	// Display results
 	if len(filteredSlots) == 0 {
 		fmt.Println("No suitable meeting times found within the specified constraints.")
@@ -289,8 +295,17 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 
 	// Group by day for summary
 	grouped := optimizer.GroupSlotsByDay(filteredSlots)
+
+	// Sort days chronologically
+	var days []string
+	for day := range grouped {
+		days = append(days, day)
+	}
+	sort.Strings(days) // sorts in YYYY-MM-DD format naturally
+
 	fmt.Printf("\nSummary by day:\n")
-	for day, slots := range grouped {
+	for _, day := range days {
+		slots := grouped[day]
 		dayTime, _ := time.Parse("2006-01-02", day)
 		fmt.Printf("  %s: %d potential slots\n", dayTime.Format("Mon, Jan 2"), len(slots))
 	}
