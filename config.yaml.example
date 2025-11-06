@@ -1,0 +1,16 @@
+# Configuration file for best-time-to-meet tool
+# Copy this file to config.yaml and customize
+
+# Google API credentials file path
+credentials: "credentials.json"
+
+# Default meeting search parameters
+duration: 60            # Meeting duration in minutes
+start_hour: 9          # Working day starts at 9 AM
+end_hour: 17           # Working day ends at 5 PM
+exclude_weekends: true # Skip Saturday and Sunday
+max_slots: 10          # Number of suggestions to show
+max_conflicts: 30      # Maximum conflict percentage to display (0-100)
+
+# You can also set default emails here (comma-separated)
+# emails: "user1@example.com,user2@example.com"
