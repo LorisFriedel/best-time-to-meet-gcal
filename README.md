@@ -7,6 +7,8 @@ A Go command-line tool that analyzes multiple Google Calendars to find optimal m
 - **Google Calendar Integration**: Directly fetches availability from Google Calendar
 - **Smart Conflict Analysis**: Identifies time slots with the least number of unavailable attendees
 - **Customizable Working Hours**: Set preferred meeting hours and exclude weekends
+- **Lunch Time Exclusion**: Automatically avoids scheduling during lunch hours
+- **Timezone Support**: Configure timezone for accurate local time handling
 - **Flexible Duration**: Support for meetings of any duration
 - **Batch Analysis**: Check availability for multiple days at once
 - **Conflict Threshold**: Filter results by maximum acceptable conflict percentage
@@ -80,6 +82,9 @@ On first run, the tool will:
   --duration 60 \                                     # Meeting duration in minutes (default: 60)
   --start-hour 9 \                                    # Working hours start (default: 9)
   --end-hour 17 \                                     # Working hours end (default: 17)
+  --lunch-start-hour 12 \                             # Lunch break start (default: 12)
+  --lunch-end-hour 13 \                               # Lunch break end (default: 13)
+  --timezone "America/New_York" \                     # IANA timezone (default: local timezone)
   --max-slots 10 \                                    # Max results to show (default: 10)
   --exclude-weekends \                                # Skip weekends (default: true)
   --max-conflicts 30 \                                # Max conflict % to show (default: 100)
@@ -92,9 +97,12 @@ Create a `config.yaml` file (see `config.yaml.example`):
 
 ```yaml
 credentials: "credentials.json"
+timezone: "America/New_York"  # Optional: IANA timezone
 duration: 60
 start_hour: 9
 end_hour: 17
+lunch_start_hour: 12
+lunch_end_hour: 13
 exclude_weekends: true
 max_slots: 10
 max_conflicts: 30
@@ -118,6 +126,8 @@ Attendees: alice@company.com, bob@company.com, charlie@company.com
 Date range: 2024-01-15 to 2024-01-19
 Meeting duration: 60 minutes
 Working hours: 09:00 - 17:00
+Lunch break: 12:00 - 13:00
+Timezone: America/New_York
 Exclude weekends: true
 
 Top 10 meeting times with least conflicts:

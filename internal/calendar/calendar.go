@@ -66,8 +66,8 @@ func GetBusyTimes(service *calendar.Service, emails []string, startTime, endTime
 	return availabilities, nil
 }
 
-// GetWorkingHours returns working hours for a given date range
-func GetWorkingHours(startDate, endDate time.Time, startHour, endHour int, excludeWeekends bool) []TimeSlot {
+// GetWorkingHours returns working hours for a given date range, excluding lunch time
+func GetWorkingHours(startDate, endDate time.Time, startHour, endHour, lunchStartHour, lunchEndHour int, excludeWeekends bool) []TimeSlot {
 	var slots []TimeSlot
 
 	current := startDate
@@ -78,14 +78,45 @@ func GetWorkingHours(startDate, endDate time.Time, startHour, endHour int, exclu
 			continue
 		}
 
-		// Create working hours slot for this day
+		// Create working hours slots for this day, splitting around lunch time
 		dayStart := time.Date(current.Year(), current.Month(), current.Day(), startHour, 0, 0, 0, current.Location())
 		dayEnd := time.Date(current.Year(), current.Month(), current.Day(), endHour, 0, 0, 0, current.Location())
+		lunchStart := time.Date(current.Year(), current.Month(), current.Day(), lunchStartHour, 0, 0, 0, current.Location())
+		lunchEnd := time.Date(current.Year(), current.Month(), current.Day(), lunchEndHour, 0, 0, 0, current.Location())
 
-		slots = append(slots, TimeSlot{
-			Start: dayStart,
-			End:   dayEnd,
-		})
+		// Add morning slot (before lunch)
+		if dayStart.Before(lunchStart) && lunchStart.Before(dayEnd) {
+			// Morning slot exists
+			morningEnd := lunchStart
+			if dayEnd.Before(lunchStart) {
+				morningEnd = dayEnd
+			}
+			slots = append(slots, TimeSlot{
+				Start: dayStart,
+				End:   morningEnd,
+			})
+		}
+
+		// Add afternoon slot (after lunch)
+		if lunchEnd.Before(dayEnd) && dayStart.Before(lunchEnd) {
+			// Afternoon slot exists
+			afternoonStart := lunchEnd
+			if dayStart.After(lunchEnd) {
+				afternoonStart = dayStart
+			}
+			slots = append(slots, TimeSlot{
+				Start: afternoonStart,
+				End:   dayEnd,
+			})
+		}
+
+		// If lunch time is outside working hours, add the whole working day
+		if lunchEnd.Before(dayStart) || lunchStart.After(dayEnd) {
+			slots = append(slots, TimeSlot{
+				Start: dayStart,
+				End:   dayEnd,
+			})
+		}
 
 		current = current.AddDate(0, 0, 1)
 	}

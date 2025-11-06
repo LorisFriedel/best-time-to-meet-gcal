@@ -4,10 +4,16 @@
 # Google API credentials file path
 credentials: "credentials.json"
 
+# Timezone configuration (IANA timezone string, e.g., "America/New_York", "Europe/London")
+# If not specified, uses system's local timezone
+timezone: ""
+
 # Default meeting search parameters
 duration: 60            # Meeting duration in minutes
 start_hour: 9          # Working day starts at 9 AM
 end_hour: 17           # Working day ends at 5 PM
+lunch_start_hour: 12   # Lunch break starts at 12 PM
+lunch_end_hour: 13     # Lunch break ends at 1 PM
 exclude_weekends: true # Skip Saturday and Sunday
 max_slots: 10          # Number of suggestions to show
 max_conflicts: 30      # Maximum conflict percentage to display (0-100)

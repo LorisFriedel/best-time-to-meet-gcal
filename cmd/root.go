@@ -23,6 +23,9 @@ var (
 	duration        int
 	startHour       int
 	endHour         int
+	lunchStartHour  int
+	lunchEndHour    int
+	timezone        string
 	maxSlots        int
 	excludeWeekends bool
 	maxConflicts    float64
@@ -56,6 +59,9 @@ func init() {
 	rootCmd.Flags().IntVarP(&duration, "duration", "d", 60, "Meeting duration in minutes")
 	rootCmd.Flags().IntVar(&startHour, "start-hour", 9, "Working hours start (24-hour format)")
 	rootCmd.Flags().IntVar(&endHour, "end-hour", 17, "Working hours end (24-hour format)")
+	rootCmd.Flags().IntVar(&lunchStartHour, "lunch-start-hour", 12, "Lunch break start (24-hour format)")
+	rootCmd.Flags().IntVar(&lunchEndHour, "lunch-end-hour", 13, "Lunch break end (24-hour format)")
+	rootCmd.Flags().StringVar(&timezone, "timezone", "", "IANA timezone (e.g. 'America/New_York'). If empty, uses local timezone")
 	rootCmd.Flags().IntVarP(&maxSlots, "max-slots", "m", 10, "Maximum number of slots to display")
 	rootCmd.Flags().BoolVarP(&excludeWeekends, "exclude-weekends", "w", true, "Exclude weekends from search")
 	rootCmd.Flags().Float64VarP(&maxConflicts, "max-conflicts", "c", 100, "Maximum conflict percentage to display (0-100)")
@@ -72,6 +78,9 @@ func init() {
 	viper.BindPFlag("duration", rootCmd.Flags().Lookup("duration"))
 	viper.BindPFlag("start_hour", rootCmd.Flags().Lookup("start-hour"))
 	viper.BindPFlag("end_hour", rootCmd.Flags().Lookup("end-hour"))
+	viper.BindPFlag("lunch_start_hour", rootCmd.Flags().Lookup("lunch-start-hour"))
+	viper.BindPFlag("lunch_end_hour", rootCmd.Flags().Lookup("lunch-end-hour"))
+	viper.BindPFlag("timezone", rootCmd.Flags().Lookup("timezone"))
 	viper.BindPFlag("max_slots", rootCmd.Flags().Lookup("max-slots"))
 	viper.BindPFlag("exclude_weekends", rootCmd.Flags().Lookup("exclude-weekends"))
 	viper.BindPFlag("max_conflicts", rootCmd.Flags().Lookup("max-conflicts"))
@@ -100,12 +109,26 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 		emailList[i] = strings.TrimSpace(email)
 	}
 
-	startTime, err := time.Parse("2006-01-02", viper.GetString("start"))
+	// Handle timezone
+	var loc *time.Location
+	tzName := viper.GetString("timezone")
+	if tzName == "" {
+		loc = time.Local
+	} else {
+		var err error
+		loc, err = time.LoadLocation(tzName)
+		if err != nil {
+			log.Fatalf("Invalid timezone '%s': %v", tzName, err)
+		}
+	}
+
+	// Parse dates in the specified timezone
+	startTime, err := time.ParseInLocation("2006-01-02", viper.GetString("start"), loc)
 	if err != nil {
 		log.Fatalf("Invalid start date: %v", err)
 	}
 
-	endTime, err := time.Parse("2006-01-02", viper.GetString("end"))
+	endTime, err := time.ParseInLocation("2006-01-02", viper.GetString("end"), loc)
 	if err != nil {
 		log.Fatalf("Invalid end date: %v", err)
 	}
@@ -117,6 +140,8 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 	fmt.Printf("Date range: %s to %s\n", startTime.Format("2006-01-02"), endTime.Format("2006-01-02"))
 	fmt.Printf("Meeting duration: %d minutes\n", viper.GetInt("duration"))
 	fmt.Printf("Working hours: %02d:00 - %02d:00\n", viper.GetInt("start_hour"), viper.GetInt("end_hour"))
+	fmt.Printf("Lunch break: %02d:00 - %02d:00\n", viper.GetInt("lunch_start_hour"), viper.GetInt("lunch_end_hour"))
+	fmt.Printf("Timezone: %s\n", loc.String())
 	fmt.Printf("Exclude weekends: %v\n\n", viper.GetBool("exclude_weekends"))
 
 	// Initialize Google Calendar service
@@ -137,6 +162,8 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 		endTime,
 		viper.GetInt("start_hour"),
 		viper.GetInt("end_hour"),
+		viper.GetInt("lunch_start_hour"),
+		viper.GetInt("lunch_end_hour"),
 		viper.GetBool("exclude_weekends"),
 	)
 
