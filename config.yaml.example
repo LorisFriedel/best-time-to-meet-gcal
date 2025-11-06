@@ -20,3 +20,6 @@ max_conflicts: 30      # Maximum conflict percentage to display (0-100)
 
 # You can also set default emails here (comma-separated)
 # emails: "user1@example.com,user2@example.com"
+
+# You can also set default mailing lists here (comma-separated)
+# mailing_lists: "engineering@example.com,product@example.com"

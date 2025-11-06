@@ -6,6 +6,7 @@ A Go command-line tool that analyzes multiple Google Calendars to find optimal m
 
 - **Google Calendar Integration**: Directly fetches availability from Google Calendar
 - **Smart Conflict Analysis**: Identifies time slots with the least number of unavailable attendees
+- **Mailing List Support**: Automatically resolves Google Groups/mailing lists to individual members
 - **Customizable Working Hours**: Set preferred meeting hours and exclude weekends
 - **Lunch Time Exclusion**: Automatically avoids scheduling during lunch hours
 - **Timezone Support**: Configure timezone for accurate local time handling
@@ -47,7 +48,10 @@ go build -o best-time-to-meet
 3. If prompted, configure the OAuth consent screen:
    - Choose "Internal" for organization use or "External" for general use
    - Fill in the required fields
-   - Add scope: `https://www.googleapis.com/auth/calendar.readonly`
+   - Add scopes:
+     - `https://www.googleapis.com/auth/calendar.readonly`
+     - `https://www.googleapis.com/auth/admin.directory.group.member.readonly` (for mailing list support)
+     - `https://www.googleapis.com/auth/admin.directory.group.readonly` (for mailing list support)
 4. For Application type, choose "Desktop app"
 5. Download the credentials JSON file
 6. Rename it to `credentials.json` and place it in the project root
@@ -70,13 +74,29 @@ On first run, the tool will:
   --start "2024-01-15" \
   --end "2024-01-19" \
   --duration 60
+
+# Or using mailing lists
+./best-time-to-meet \
+  --mailing-lists "engineering@company.com,product@company.com" \
+  --start "2024-01-15" \
+  --end "2024-01-19" \
+  --duration 60
+
+# Or combining both individual emails and mailing lists
+./best-time-to-meet \
+  --emails "alice@company.com" \
+  --mailing-lists "engineering@company.com" \
+  --start "2024-01-15" \
+  --end "2024-01-19" \
+  --duration 60
 ```
 
 ### All Options
 
 ```bash
 ./best-time-to-meet \
-  --emails "email1@company.com,email2@company.com" \  # Required: attendee emails
+  --emails "email1@company.com,email2@company.com" \  # Individual attendee emails
+  --mailing-lists "team@company.com,dept@company.com" \ # Google Groups/mailing lists
   --start "2024-01-15" \                              # Required: start date (YYYY-MM-DD)
   --end "2024-01-19" \                                # Required: end date (YYYY-MM-DD)
   --duration 60 \                                     # Meeting duration in minutes (default: 60)
@@ -152,13 +172,50 @@ Summary by day:
   Wed, Jan 17: 3 potential slots
 ```
 
+## Mailing List Support
+
+The tool can automatically resolve Google Groups (mailing lists) to individual members. This is especially useful for scheduling team meetings without having to manually list every team member.
+
+### Requirements for Mailing Lists
+
+1. **Google Workspace**: Mailing list resolution requires access to Google Workspace Admin Directory API
+2. **Permissions**: Your Google account needs permission to read group members:
+   - For Google Workspace domains: Request "Groups Reader" role from your admin
+   - OAuth consent screen must include the directory scopes listed above
+3. **Token Update**: If you previously authenticated without directory scopes, delete `token.json` and re-authenticate
+
+### Mailing List Examples
+
+```bash
+# Schedule a meeting for the entire engineering team
+./best-time-to-meet \
+  --mailing-lists "engineering@company.com" \
+  --start "2024-01-15" \
+  --end "2024-01-19" \
+  --duration 60
+
+# Mix individual attendees with groups
+./best-time-to-meet \
+  --emails "ceo@company.com,external@partner.com" \
+  --mailing-lists "leadership@company.com" \
+  --start "2024-01-15" \
+  --end "2024-01-19"
+```
+
+### Notes on Mailing Lists
+
+- The tool automatically handles nested groups (groups within groups)
+- Duplicate members are automatically removed
+- If a mailing list can't be resolved (e.g., external or no permissions), it's treated as an individual email
+- Large mailing lists may take a few seconds to resolve
+
 ## Tips for Best Results
 
 1. **Time Zones**: All times are displayed in your local timezone. The tool handles timezone conversions automatically.
 
 2. **Large Groups**: For large groups, consider using `--max-conflicts` to find slots where most (but not all) can attend:
    ```bash
-   ./best-time-to-meet --emails "..." --max-conflicts 20  # Show slots with ≤20% conflicts
+   ./best-time-to-meet --mailing-lists "all-hands@company.com" --max-conflicts 20  # Show slots with ≤20% conflicts
    ```
 
 3. **Recurring Meetings**: To find recurring meeting times, run the tool for different weeks and look for patterns.
@@ -185,6 +242,11 @@ Summary by day:
 ### Token expired
 - Delete `token.json` and re-authenticate
 - The tool will automatically prompt for re-authentication
+
+### Mailing list issues
+- **"insufficient permissions to read group members"**: Your account needs "Groups Reader" role in Google Workspace Admin
+- **"Could not get members for [group]"**: The group might be external or you lack permissions
+- **Groups not resolving**: Delete `token.json` and re-authenticate to get the new directory scopes
 
 ## Privacy & Security
 

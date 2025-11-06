@@ -9,6 +9,7 @@ import (
 
 	"github.com/LorisFriedel/find-best-meeting-time-google/internal/auth"
 	"github.com/LorisFriedel/find-best-meeting-time-google/internal/calendar"
+	"github.com/LorisFriedel/find-best-meeting-time-google/internal/directory"
 	"github.com/LorisFriedel/find-best-meeting-time-google/internal/optimizer"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -18,6 +19,7 @@ var (
 	cfgFile         string
 	credentialsFile string
 	emails          string
+	mailingLists    string
 	startDate       string
 	endDate         string
 	duration        int
@@ -53,7 +55,8 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is ./config.yaml)")
 	rootCmd.PersistentFlags().StringVar(&credentialsFile, "credentials", "credentials.json", "Google API credentials file")
 
-	rootCmd.Flags().StringVarP(&emails, "emails", "e", "", "Comma-separated list of email addresses (required)")
+	rootCmd.Flags().StringVarP(&emails, "emails", "e", "", "Comma-separated list of individual email addresses")
+	rootCmd.Flags().StringVarP(&mailingLists, "mailing-lists", "l", "", "Comma-separated list of mailing list/group email addresses")
 	rootCmd.Flags().StringVarP(&startDate, "start", "s", "", "Start date (YYYY-MM-DD) (required)")
 	rootCmd.Flags().StringVarP(&endDate, "end", "E", "", "End date (YYYY-MM-DD) (required)")
 	rootCmd.Flags().IntVarP(&duration, "duration", "d", 60, "Meeting duration in minutes")
@@ -66,13 +69,14 @@ func init() {
 	rootCmd.Flags().BoolVarP(&excludeWeekends, "exclude-weekends", "w", true, "Exclude weekends from search")
 	rootCmd.Flags().Float64VarP(&maxConflicts, "max-conflicts", "c", 100, "Maximum conflict percentage to display (0-100)")
 
-	rootCmd.MarkFlagRequired("emails")
+	// At least one of emails or mailing-lists is required
 	rootCmd.MarkFlagRequired("start")
 	rootCmd.MarkFlagRequired("end")
 
 	// Bind flags to viper
 	viper.BindPFlag("credentials", rootCmd.PersistentFlags().Lookup("credentials"))
 	viper.BindPFlag("emails", rootCmd.Flags().Lookup("emails"))
+	viper.BindPFlag("mailing_lists", rootCmd.Flags().Lookup("mailing-lists"))
 	viper.BindPFlag("start", rootCmd.Flags().Lookup("start"))
 	viper.BindPFlag("end", rootCmd.Flags().Lookup("end"))
 	viper.BindPFlag("duration", rootCmd.Flags().Lookup("duration"))
@@ -104,9 +108,79 @@ func initConfig() {
 
 func runFindMeetingTime(cmd *cobra.Command, args []string) {
 	// Parse inputs
-	emailList := strings.Split(viper.GetString("emails"), ",")
-	for i, email := range emailList {
-		emailList[i] = strings.TrimSpace(email)
+	emailsStr := viper.GetString("emails")
+	mailingListsStr := viper.GetString("mailing_lists")
+	
+	// Check that at least one of emails or mailing-lists is provided
+	if emailsStr == "" && mailingListsStr == "" {
+		log.Fatal("At least one of --emails or --mailing-lists must be provided")
+	}
+	
+	var allEmails []string
+	
+	// Parse individual emails
+	if emailsStr != "" {
+		emails := strings.Split(emailsStr, ",")
+		for _, email := range emails {
+			email = strings.TrimSpace(email)
+			if email != "" {
+				allEmails = append(allEmails, email)
+			}
+		}
+	}
+	
+	// Parse and resolve mailing lists
+	if mailingListsStr != "" {
+		mailingLists := strings.Split(mailingListsStr, ",")
+		var mailingListsClean []string
+		for _, ml := range mailingLists {
+			ml = strings.TrimSpace(ml)
+			if ml != "" {
+				mailingListsClean = append(mailingListsClean, ml)
+			}
+		}
+		
+		if len(mailingListsClean) > 0 {
+			// Get Directory service
+			directoryService, err := auth.GetDirectoryService(viper.GetString("credentials"))
+			if err != nil {
+				log.Printf("Warning: Could not get Directory service for mailing list resolution: %v", err)
+				log.Printf("Treating mailing lists as individual emails")
+				allEmails = append(allEmails, mailingListsClean...)
+			} else {
+				// Check if we have proper access
+				if err := directory.CheckGroupAccess(directoryService); err != nil {
+					log.Printf("Warning: %v", err)
+					log.Printf("Treating mailing lists as individual emails")
+					allEmails = append(allEmails, mailingListsClean...)
+				} else {
+					// Resolve mailing list members
+					fmt.Printf("Resolving mailing lists...\n")
+					resolvedEmails, err := directory.ResolveMemberEmails(directoryService, mailingListsClean)
+					if err != nil {
+						log.Printf("Warning: Error resolving mailing lists: %v", err)
+						log.Printf("Treating mailing lists as individual emails")
+						allEmails = append(allEmails, mailingListsClean...)
+					} else {
+						allEmails = append(allEmails, resolvedEmails...)
+					}
+				}
+			}
+		}
+	}
+	
+	// Remove duplicates
+	emailMap := make(map[string]bool)
+	var emailList []string
+	for _, email := range allEmails {
+		if !emailMap[email] {
+			emailMap[email] = true
+			emailList = append(emailList, email)
+		}
+	}
+	
+	if len(emailList) == 0 {
+		log.Fatal("No valid email addresses found")
 	}
 
 	// Handle timezone

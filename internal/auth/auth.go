@@ -12,6 +12,7 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/calendar/v3"
+	directory "google.golang.org/api/admin/directory/v1"
 	"google.golang.org/api/option"
 )
 
@@ -75,7 +76,8 @@ func GetCalendarService(credentialsFile string) (*calendar.Service, error) {
 	}
 
 	// If modifying these scopes, delete your previously saved token.json.
-	config, err := google.ConfigFromJSON(b, calendar.CalendarReadonlyScope)
+	// We need both calendar.readonly and directory.group.member.readonly scopes
+	config, err := google.ConfigFromJSON(b, calendar.CalendarReadonlyScope, directory.AdminDirectoryGroupMemberReadonlyScope, directory.AdminDirectoryGroupReadonlyScope)
 	if err != nil {
 		return nil, fmt.Errorf("unable to parse client secret file to config: %v", err)
 	}
@@ -84,6 +86,29 @@ func GetCalendarService(credentialsFile string) (*calendar.Service, error) {
 	srv, err := calendar.NewService(context.Background(), option.WithHTTPClient(client))
 	if err != nil {
 		return nil, fmt.Errorf("unable to retrieve Calendar client: %v", err)
+	}
+
+	return srv, nil
+}
+
+// GetDirectoryService creates and returns a Google Directory service
+func GetDirectoryService(credentialsFile string) (*directory.Service, error) {
+	b, err := ioutil.ReadFile(credentialsFile)
+	if err != nil {
+		return nil, fmt.Errorf("unable to read client secret file: %v", err)
+	}
+
+	// If modifying these scopes, delete your previously saved token.json.
+	// We need both calendar.readonly and directory.group.member.readonly scopes
+	config, err := google.ConfigFromJSON(b, calendar.CalendarReadonlyScope, directory.AdminDirectoryGroupMemberReadonlyScope, directory.AdminDirectoryGroupReadonlyScope)
+	if err != nil {
+		return nil, fmt.Errorf("unable to parse client secret file to config: %v", err)
+	}
+	client := GetClient(config)
+
+	srv, err := directory.NewService(context.Background(), option.WithHTTPClient(client))
+	if err != nil {
+		return nil, fmt.Errorf("unable to retrieve Directory client: %v", err)
 	}
 
 	return srv, nil
