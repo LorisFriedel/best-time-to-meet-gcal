@@ -201,15 +201,15 @@ Working hours: 9:00 - 17:00 (in each attendee's local time)
 📊 AVAILABILITY SUMMARY BY DAY:
 
 📆 Mon, Jan 15
-   Total slots: 4 | Perfect slots: 2 | Best conflict: 0% | Avg: 25%
+   Total slots: 4 | Perfect slots: 2 | Best conflict: 0% | Avg: 25% | Best TZ score: 100%
    Time range: 09:00 - 16:00
 
 📆 Tue, Jan 16
-   Total slots: 3 | Perfect slots: 0 | Best conflict: 25% | Avg: 33%
+   Total slots: 3 | Perfect slots: 0 | Best conflict: 25% | Avg: 33% | Best TZ score: 100%
    Time range: 10:00 - 16:30
 
 📆 Wed, Jan 17
-   Total slots: 3 | Perfect slots: 1 | Best conflict: 0% | Avg: 22%
+   Total slots: 3 | Perfect slots: 1 | Best conflict: 0% | Avg: 22% | Best TZ score: 90%
    Time range: 09:30 - 16:00
 
 --------------------------------------------------------------------------------
@@ -246,7 +246,8 @@ The tool automatically detects each attendee's calendar timezone and optimizes m
 1. **Automatic Detection**: Fetches timezone from each Google Calendar
 2. **Working Hours Adjustment**: Applies the same working hours (e.g., 9 AM - 5 PM) but in each attendee's local timezone
 3. **Smart Scoring**: Each meeting slot gets a "Timezone Score" (0-100%) indicating what percentage of available attendees would be within their working hours
-4. **Combined Optimization**: Final ranking considers both:
+4. **Daily Summary**: The "AVAILABILITY SUMMARY BY DAY" now shows the best timezone score for each day, helping you identify days with the most timezone-friendly options
+5. **Combined Optimization**: Final ranking considers both:
    - Calendar conflicts (70% weight)
    - Timezone compatibility (30% weight)
 

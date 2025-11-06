@@ -417,12 +417,12 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 		slots := grouped[day]
 		dayTime, _ := time.Parse("2006-01-02", day)
 
-		bestConflict, avgConflict, perfectCount := optimizer.GetDaySummaryStats(slots)
+		bestConflict, avgConflict, perfectCount, bestTimezoneScore := optimizer.GetDaySummaryStats(slots)
 
 		dayName := dayTime.Format("Mon, Jan 2")
 		fmt.Printf("📆 %s\n", dayName)
-		fmt.Printf("   Total slots: %d | Perfect slots: %d | Best conflict: %.0f%% | Avg: %.0f%%\n",
-			len(slots), perfectCount, bestConflict, avgConflict)
+		fmt.Printf("   Total slots: %d | Perfect slots: %d | Best conflict: %.0f%% | Avg: %.0f%% | Best TZ score: %.0f%%\n",
+			len(slots), perfectCount, bestConflict, avgConflict, bestTimezoneScore)
 
 		// Show time ranges for this day
 		if len(slots) > 0 {

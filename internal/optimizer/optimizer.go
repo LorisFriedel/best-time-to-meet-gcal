@@ -306,13 +306,14 @@ func GroupSlotsByConflictLevel(slots []MeetingSlot) map[string][]MeetingSlot {
 }
 
 // GetDaySummaryStats calculates statistics for slots on a given day
-func GetDaySummaryStats(slots []MeetingSlot) (bestConflict float64, avgConflict float64, noConflictCount int) {
+func GetDaySummaryStats(slots []MeetingSlot) (bestConflict float64, avgConflict float64, noConflictCount int, bestTimezoneScore float64) {
 	if len(slots) == 0 {
-		return 100, 100, 0
+		return 100, 100, 0, 0
 	}
 
 	bestConflict = 100.0
 	totalConflict := 0.0
+	bestTimezoneScore = 0.0
 
 	for _, slot := range slots {
 		if slot.ConflictPercentage < bestConflict {
@@ -320,6 +321,9 @@ func GetDaySummaryStats(slots []MeetingSlot) (bestConflict float64, avgConflict 
 		}
 		if slot.ConflictPercentage == 0 {
 			noConflictCount++
+		}
+		if slot.TimeZoneScore > bestTimezoneScore {
+			bestTimezoneScore = slot.TimeZoneScore
 		}
 		totalConflict += slot.ConflictPercentage
 	}
