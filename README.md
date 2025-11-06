@@ -9,7 +9,7 @@ A Go command-line tool that analyzes multiple Google Calendars to find optimal m
 - **Mailing List Support**: Automatically resolves Google Groups/mailing lists to individual members
 - **Customizable Working Hours**: Set preferred meeting hours and exclude weekends
 - **Lunch Time Exclusion**: Automatically avoids scheduling during lunch hours
-- **Timezone Support**: Configure timezone for accurate local time handling
+- **Timezone-Aware Scheduling**: Automatically detects each attendee's timezone and optimizes meeting times to fit everyone's working hours
 - **Flexible Duration**: Support for meetings of any duration
 - **Batch Analysis**: Check availability for multiple days at once
 - **Conflict Threshold**: Filter results by maximum acceptable conflict percentage
@@ -104,7 +104,7 @@ On first run, the tool will:
   --end-hour 17 \                                     # Working hours end (default: 17)
   --lunch-start-hour 12 \                             # Lunch break start (default: 12)
   --lunch-end-hour 13 \                               # Lunch break end (default: 13)
-  --timezone "America/New_York" \                     # IANA timezone (default: local timezone)
+  --timezone "America/New_York" \                     # Reference timezone for search (default: local timezone)
   --max-slots 10 \                                    # Max results to show (default: 10)
   --exclude-weekends \                                # Skip weekends (default: true)
   --max-conflicts 30 \                                # Max conflict % to show (default: 100)
@@ -168,6 +168,20 @@ Timezone: America/New_York
 Exclude weekends: true
 
 ================================================================================
+🌍 TIMEZONE INFORMATION
+================================================================================
+
+Attendees by timezone:
+  • America/New_York: 5 attendee(s)
+    alice@company.com, bob@company.com, charlie@company.com, ... and 2 more
+  • Europe/London: 3 attendee(s)
+    david@company.com, emma@company.com, frank@company.com
+  • Asia/Tokyo: 2 attendee(s)
+    george@company.com, helen@company.com
+
+Working hours: 9:00 - 17:00 (in each attendee's local time)
+
+================================================================================
 📅 BEST MEETING TIME OPTIONS
 ================================================================================
 
@@ -207,13 +221,15 @@ Exclude weekends: true
 
 2. Mon, Jan 15, 2024 at 15:00 - 16:00 ✅ Perfect - All attendees available!
 
-3. Wed, Jan 17, 2024 at 09:30 - 10:30 ✅ Perfect - All attendees available!
+3. Wed, Jan 17, 2024 at 09:30 - 10:30 ✅ Perfect - All attendees available! (TZ Score: 90%)
+   ⏰ Outside working hours for: george@company.com
 
-4. Tue, Jan 16, 2024 at 10:00 - 11:00 🟡 25% conflict
+4. Tue, Jan 16, 2024 at 10:00 - 11:00 🟡 25% conflict | TZ Score: 100%
    Unavailable (1/3): bob@company.com
 
-5. Wed, Jan 17, 2024 at 15:30 - 16:30 ⚠️ 33% conflict
+5. Wed, Jan 17, 2024 at 15:30 - 16:30 ⚠️ 33% conflict | TZ Score: 80%
    Unavailable (1/3): charlie@company.com
+   ⏰ Outside working hours for: helen@company.com
 
 ================================================================================
 💡 RECOMMENDATION:
@@ -222,6 +238,19 @@ Exclude weekends: true
    (This matches the best option shown above)
 ================================================================================
 ```
+
+## Timezone-Aware Scheduling
+
+The tool automatically detects each attendee's calendar timezone and optimizes meeting times accordingly:
+
+1. **Automatic Detection**: Fetches timezone from each Google Calendar
+2. **Working Hours Adjustment**: Applies the same working hours (e.g., 9 AM - 5 PM) but in each attendee's local timezone
+3. **Smart Scoring**: Each meeting slot gets a "Timezone Score" (0-100%) indicating what percentage of available attendees would be within their working hours
+4. **Combined Optimization**: Final ranking considers both:
+   - Calendar conflicts (70% weight)
+   - Timezone compatibility (30% weight)
+
+This ensures meetings are scheduled at times that work well for distributed teams across different time zones.
 
 ## Mailing List Support
 
@@ -262,7 +291,7 @@ The tool can automatically resolve Google Groups (mailing lists) to individual m
 
 ## Tips for Best Results
 
-1. **Time Zones**: All times are displayed in your local timezone. The tool handles timezone conversions automatically.
+1. **Time Zones**: The tool automatically detects each attendee's calendar timezone and considers it when finding optimal meeting times. Meeting slots are scored based on how well they fit into everyone's local working hours. Times are displayed in the timezone specified by the `--timezone` parameter (or your local timezone if not specified).
 
 2. **Large Groups**: For large groups, consider using `--max-conflicts` to find slots where most (but not all) can attend:
    ```bash

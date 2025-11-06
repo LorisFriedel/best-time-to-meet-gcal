@@ -271,12 +271,22 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 		viper.GetBool("exclude_weekends"),
 	)
 
+	// Create working hours config
+	workingHoursConfig := optimizer.WorkingHoursConfig{
+		StartHour:       viper.GetInt("start_hour"),
+		EndHour:         viper.GetInt("end_hour"),
+		LunchStartHour:  viper.GetInt("lunch_start_hour"),
+		LunchEndHour:    viper.GetInt("lunch_end_hour"),
+		ExcludeWeekends: viper.GetBool("exclude_weekends"),
+	}
+
 	// Find optimal meeting times
 	optimalSlots := optimizer.FindOptimalMeetingSlots(
 		availabilities,
 		potentialSlots,
 		meetingDuration,
 		viper.GetInt("max_slots")*3, // Get more slots initially for filtering
+		workingHoursConfig,
 	)
 
 	log.Debug().
@@ -313,6 +323,33 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 		fmt.Println("No suitable meeting times found within the specified constraints.")
 		return
 	}
+
+	// === TIMEZONE SUMMARY ===
+	fmt.Println("\n" + strings.Repeat("=", 80))
+	fmt.Println("🌍 TIMEZONE INFORMATION")
+	fmt.Println(strings.Repeat("=", 80))
+
+	// Collect timezone information
+	tzMap := make(map[string][]string) // timezone -> list of emails
+	for _, avail := range availabilities {
+		tzName := "Unknown"
+		if avail.TimeZone != nil {
+			tzName = avail.TimeZone.String()
+		}
+		tzMap[tzName] = append(tzMap[tzName], avail.Email)
+	}
+
+	fmt.Printf("\nAttendees by timezone:\n")
+	for tz, emails := range tzMap {
+		fmt.Printf("  • %s: %d attendee(s)\n", tz, len(emails))
+		if len(emails) <= 3 {
+			fmt.Printf("    %s\n", strings.Join(emails, ", "))
+		} else {
+			fmt.Printf("    %s, ... and %d more\n", strings.Join(emails[:3], ", "), len(emails)-3)
+		}
+	}
+	fmt.Printf("\nWorking hours: %d:00 - %d:00 (in each attendee's local time)\n",
+		viper.GetInt("start_hour"), viper.GetInt("end_hour"))
 
 	// === BEST OPTIONS SUMMARY ===
 	fmt.Println("\n" + strings.Repeat("=", 80))
@@ -422,7 +459,12 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 		)
 
 		if slot.UnavailableCount == 0 {
-			fmt.Printf(" ✅ Perfect - All attendees available!\n")
+			fmt.Printf(" ✅ Perfect - All attendees available!")
+			// Show timezone score even for perfect slots
+			if slot.TimeZoneScore < 100 {
+				fmt.Printf(" (TZ Score: %.0f%%)", slot.TimeZoneScore)
+			}
+			fmt.Println()
 		} else {
 			conflictIcon := "⚠️"
 			if slot.ConflictPercentage > 50 {
@@ -431,14 +473,25 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 				conflictIcon = "🟡"
 			}
 
-			fmt.Printf(" %s %.0f%% conflict\n",
+			fmt.Printf(" %s %.0f%% conflict | TZ Score: %.0f%%\n",
 				conflictIcon,
 				slot.ConflictPercentage,
+				slot.TimeZoneScore,
 			)
 			fmt.Printf("   Unavailable (%d/%d): %s\n",
 				slot.UnavailableCount,
 				len(availabilities),
 				strings.Join(slot.UnavailableEmails, ", "))
+		}
+
+		// Show who's outside working hours
+		if len(slot.OutsideWorkingHours) > 0 {
+			outsideHours := []string{}
+			for email := range slot.OutsideWorkingHours {
+				outsideHours = append(outsideHours, email)
+			}
+			sort.Strings(outsideHours)
+			fmt.Printf("   ⏰ Outside working hours for: %s\n", strings.Join(outsideHours, ", "))
 		}
 	}
 
@@ -451,11 +504,15 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 	if len(filteredSlots) > 0 {
 		bestSlot = filteredSlots[0]
 		for _, slot := range filteredSlots {
-			// First priority: lower conflict percentage
-			if slot.ConflictPercentage < bestSlot.ConflictPercentage {
+			// Calculate combined score (lower is better)
+			// Weight: 70% for conflicts, 30% for timezone compatibility
+			currentScore := slot.ConflictPercentage*0.7 + (100-slot.TimeZoneScore)*0.3
+			bestScore := bestSlot.ConflictPercentage*0.7 + (100-bestSlot.TimeZoneScore)*0.3
+
+			if currentScore < bestScore {
 				bestSlot = slot
-			} else if slot.ConflictPercentage == bestSlot.ConflictPercentage {
-				// Second priority: earlier time if conflict percentage is the same
+			} else if currentScore == bestScore {
+				// If scores are equal, prefer earlier time
 				if slot.TimeSlot.Start.Before(bestSlot.TimeSlot.Start) {
 					bestSlot = slot
 				}
@@ -469,12 +526,20 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 
 		if bestSlot.UnavailableCount == 0 {
 			fmt.Println("   This slot has perfect attendance with all attendees available!")
+			if bestSlot.TimeZoneScore < 100 {
+				fmt.Printf("   Timezone Score: %.0f%% (some attendees outside working hours)\n", bestSlot.TimeZoneScore)
+			}
 		} else {
 			fmt.Printf("   Only %.0f%% conflict rate (%d/%d unavailable)\n",
 				bestSlot.ConflictPercentage,
 				bestSlot.UnavailableCount,
 				len(availabilities),
 			)
+			fmt.Printf("   Timezone Score: %.0f%%", bestSlot.TimeZoneScore)
+			if bestSlot.TimeZoneScore < 100 {
+				fmt.Printf(" (some attendees outside working hours)")
+			}
+			fmt.Println()
 
 			// If this matches what we showed in the GOOD OPTIONS section, mention it
 			if len(conflictGroups["low-conflicts"]) > 0 {
