@@ -36,6 +36,7 @@ var (
 	maxConflicts    float64
 	debug           bool
 	jsonOutput      bool
+	batchSize       int
 )
 
 // JSONOutput represents the complete output in JSON format
@@ -162,6 +163,7 @@ func init() {
 	rootCmd.Flags().Float64VarP(&maxConflicts, "max-conflicts", "c", 100, "Maximum conflict percentage to display (0-100)")
 	rootCmd.Flags().BoolVar(&debug, "debug", false, "Enable debug logging")
 	rootCmd.Flags().BoolVar(&jsonOutput, "json", false, "Output results in JSON format")
+	rootCmd.Flags().IntVar(&batchSize, "batch-size", 50, "Number of calendars to process per API request (for large groups)")
 
 	// At least one of emails or mailing-lists is required
 	rootCmd.MarkFlagRequired("start")
@@ -184,6 +186,7 @@ func init() {
 	viper.BindPFlag("max_conflicts", rootCmd.Flags().Lookup("max-conflicts"))
 	viper.BindPFlag("debug", rootCmd.Flags().Lookup("debug"))
 	viper.BindPFlag("json_output", rootCmd.Flags().Lookup("json"))
+	viper.BindPFlag("batch_size", rootCmd.Flags().Lookup("batch-size"))
 }
 
 func initConfig() {
@@ -229,6 +232,7 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 	}
 
 	// Parse and resolve mailing lists
+	var resolutionSummary *directory.ResolutionSummary
 	if mailingListsStr != "" {
 		mailingLists := strings.Split(mailingListsStr, ",")
 		var mailingListsClean []string
@@ -253,16 +257,43 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 					log.Warn().Msg("Treating mailing lists as individual emails")
 					allEmails = append(allEmails, mailingListsClean...)
 				} else {
-					// Resolve mailing list members
+					// Resolve mailing list members with detailed information
 					log.Info().Msg("Resolving mailing lists...")
-					resolvedEmails, err := directory.ResolveMemberEmails(directoryService, mailingListsClean)
-					if err != nil {
-						log.Warn().Err(err).Msg("Error resolving mailing lists")
-						log.Warn().Msg("Treating mailing lists as individual emails")
-						allEmails = append(allEmails, mailingListsClean...)
-					} else {
-						allEmails = append(allEmails, resolvedEmails...)
+					var resolvedEmails []string
+					resolvedEmails, resolutionSummary = directory.ResolveMemberEmailsDetailed(directoryService, mailingListsClean)
+
+					// Report on resolution results
+					if resolutionSummary.ResolvedGroups > 0 {
+						log.Info().
+							Int("resolved_groups", resolutionSummary.ResolvedGroups).
+							Int("total_members", len(resolvedEmails)).
+							Msg("Successfully resolved mailing lists")
 					}
+
+					// Warn about unresolved groups
+					if resolutionSummary.UnresolvedGroups > 0 {
+						log.Warn().
+							Int("unresolved_groups", resolutionSummary.UnresolvedGroups).
+							Msg("Some mailing lists could not be resolved")
+
+						// Show details for each unresolved group
+						for _, result := range resolutionSummary.Results {
+							if result.Error != nil {
+								if result.ErrorType == "external_domain" || result.ErrorType == "not_found" {
+									log.Warn().
+										Str("email", result.OriginalEmail).
+										Str("reason", "external domain or not found").
+										Msg("❌ Could not resolve mailing list - may be external domain")
+									fmt.Fprintf(os.Stderr, "\n⚠️  Mailing list '%s' could not be resolved.\n", result.OriginalEmail)
+									fmt.Fprintf(os.Stderr, "   This appears to be an external mailing list or doesn't exist in your domain.\n")
+									fmt.Fprintf(os.Stderr, "   The tool will attempt to use it as an individual email, but group emails don't have calendars.\n")
+									fmt.Fprintf(os.Stderr, "   Note: Google Calendar cannot expand groups with more than 200 members.\n\n")
+								}
+							}
+						}
+					}
+
+					allEmails = append(allEmails, resolvedEmails...)
 				}
 			}
 		}
@@ -329,7 +360,7 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 	}
 
 	// Get busy times for all attendees
-	availabilities, err := calendar.GetBusyTimes(service, emailList, startTime, endTime.Add(24*time.Hour))
+	availabilities, err := calendar.GetBusyTimesWithBatching(service, emailList, startTime, endTime.Add(24*time.Hour), viper.GetInt("batch_size"))
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to get busy times")
 	}
@@ -343,12 +374,51 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 		log.Debug().Str("email", avail.Email).Msg("Got calendar data")
 	}
 
-	// If we couldn't get calendar data for all attendees, show a warning
+	// Check for missing calendars and provide detailed feedback
 	if len(availabilities) < len(emailList) {
+		missingCalendars := calendar.GetMissingCalendars(emailList, availabilities)
+
 		log.Warn().
 			Int("accessible_calendars", len(availabilities)).
 			Int("requested_attendees", len(emailList)).
-			Msg("Could not access all requested calendars. Results are based only on accessible calendars.")
+			Int("missing_calendars", len(missingCalendars)).
+			Msg("Could not access all requested calendars")
+
+		// If there are unresolved groups from earlier, check if they're the missing ones
+		if resolutionSummary != nil && resolutionSummary.UnresolvedGroups > 0 {
+			for _, missing := range missingCalendars {
+				// Check if this was an unresolved group
+				for _, result := range resolutionSummary.Results {
+					if result.OriginalEmail == missing && result.Error != nil {
+						fmt.Fprintf(os.Stderr, "\n❌ No calendar found for '%s'\n", missing)
+						fmt.Fprintf(os.Stderr, "   This email was identified as an external mailing list.\n")
+						fmt.Fprintf(os.Stderr, "   Group/mailing list emails don't have calendars.\n\n")
+						break
+					}
+				}
+			}
+		}
+
+		// If we have NO calendars at all, provide helpful error message and exit
+		if len(availabilities) == 0 {
+			fmt.Fprintf(os.Stderr, "\n🚫 ERROR: No calendar data could be retrieved for any attendees.\n\n")
+			fmt.Fprintf(os.Stderr, "Possible reasons:\n")
+			fmt.Fprintf(os.Stderr, "  1. External mailing lists: Group emails from external domains cannot be resolved\n")
+			fmt.Fprintf(os.Stderr, "     and don't have calendars.\n\n")
+			fmt.Fprintf(os.Stderr, "  2. Large groups: Google Calendar cannot process groups with more than 200 members.\n\n")
+			fmt.Fprintf(os.Stderr, "  3. No calendar access: You may not have permission to view these calendars.\n\n")
+			fmt.Fprintf(os.Stderr, "Solutions:\n")
+			fmt.Fprintf(os.Stderr, "  • For external groups: Request the individual member email addresses from\n")
+			fmt.Fprintf(os.Stderr, "    the group owner and use --emails instead.\n\n")
+			fmt.Fprintf(os.Stderr, "  • For internal groups: Verify the group exists in your Google Workspace domain.\n\n")
+			fmt.Fprintf(os.Stderr, "  • Check calendar sharing: Ensure calendars are shared with you or set to\n")
+			fmt.Fprintf(os.Stderr, "    \"show free/busy\" at minimum.\n\n")
+			log.Fatal().Msg("No calendar data available to process")
+		}
+
+		fmt.Fprintf(os.Stderr, "\n⚠️  Results are based only on %d out of %d requested attendees.\n",
+			len(availabilities), len(emailList))
+		fmt.Fprintf(os.Stderr, "   Missing calendar data for: %v\n\n", missingCalendars)
 	}
 
 	// Get potential meeting slots (working hours)

@@ -2,8 +2,10 @@ package calendar
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"google.golang.org/api/calendar/v3"
 )
 
@@ -20,8 +22,96 @@ type UserAvailability struct {
 	TimeZone  *time.Location // User's calendar timezone
 }
 
-// GetBusyTimes fetches busy times for multiple users
+// CalendarAccessResult represents the result of checking calendar access for an email
+type CalendarAccessResult struct {
+	Email       string
+	HasAccess   bool
+	Error       error
+	ErrorReason string // "no_calendar", "permission_denied", "external", etc.
+}
+
+// Default batch size for Calendar API requests
+const DefaultBatchSize = 50
+
+// GetBusyTimes fetches busy times for multiple users, automatically batching if needed
 func GetBusyTimes(service *calendar.Service, emails []string, startTime, endTime time.Time) ([]UserAvailability, error) {
+	return GetBusyTimesWithBatching(service, emails, startTime, endTime, DefaultBatchSize)
+}
+
+// GetBusyTimesWithBatching fetches busy times for multiple users with configurable batch size
+func GetBusyTimesWithBatching(service *calendar.Service, emails []string, startTime, endTime time.Time, batchSize int) ([]UserAvailability, error) {
+	if batchSize <= 0 {
+		batchSize = DefaultBatchSize
+	}
+
+	// If we have few enough emails, process in a single batch
+	if len(emails) <= batchSize {
+		return getBusyTimesBatch(service, emails, startTime, endTime)
+	}
+
+	// Process in batches
+	log.Info().
+		Int("total_emails", len(emails)).
+		Int("batch_size", batchSize).
+		Int("num_batches", (len(emails)+batchSize-1)/batchSize).
+		Msg("Processing calendars in batches")
+
+	var allAvailabilities []UserAvailability
+	emailMap := make(map[string]bool) // Track which emails we've already processed
+
+	for i := 0; i < len(emails); i += batchSize {
+		end := i + batchSize
+		if end > len(emails) {
+			end = len(emails)
+		}
+
+		batch := emails[i:end]
+		batchNum := (i / batchSize) + 1
+		totalBatches := (len(emails) + batchSize - 1) / batchSize
+
+		log.Debug().
+			Int("batch_num", batchNum).
+			Int("total_batches", totalBatches).
+			Int("batch_size", len(batch)).
+			Msg("Processing batch")
+
+		// Get availability for this batch
+		batchAvailabilities, err := getBusyTimesBatch(service, batch, startTime, endTime)
+		if err != nil {
+			// Log the error but continue with other batches
+			log.Warn().
+				Err(err).
+				Int("batch_num", batchNum).
+				Int("batch_size", len(batch)).
+				Msg("Failed to get calendar data for batch")
+			// Continue processing other batches rather than failing entirely
+			continue
+		}
+
+		// Add unique results (avoid duplicates if an email appears in multiple batches)
+		for _, avail := range batchAvailabilities {
+			if !emailMap[avail.Email] {
+				emailMap[avail.Email] = true
+				allAvailabilities = append(allAvailabilities, avail)
+			}
+		}
+
+		log.Debug().
+			Int("batch_num", batchNum).
+			Int("calendars_retrieved", len(batchAvailabilities)).
+			Msg("Batch completed")
+	}
+
+	log.Info().
+		Int("total_calendars_retrieved", len(allAvailabilities)).
+		Int("total_requested", len(emails)).
+		Msg("Batch processing completed")
+
+	return allAvailabilities, nil
+}
+
+// getBusyTimesBatch fetches busy times for a single batch of users
+func getBusyTimesBatch(service *calendar.Service, emails []string, startTime, endTime time.Time) ([]UserAvailability, error) {
 	// Create freebusy query
 	items := make([]*calendar.FreeBusyRequestItem, len(emails))
 	for i, email := range emails {
@@ -155,17 +245,17 @@ func GetWorkingHours(startDate, endDate time.Time, startHour, endHour, lunchStar
 }
 
 // GetUserWorkingHours returns working hours for a specific user in their timezone
-func GetUserWorkingHours(startDate, endDate time.Time, startHour, endHour, lunchStartHour, lunchEndHour int, 
+func GetUserWorkingHours(startDate, endDate time.Time, startHour, endHour, lunchStartHour, lunchEndHour int,
 	userTimezone *time.Location, excludeWeekends bool) []TimeSlot {
 	var slots []TimeSlot
 
 	// Convert dates to user's timezone
 	startInUserTZ := startDate.In(userTimezone)
 	endInUserTZ := endDate.In(userTimezone)
-	
+
 	current := time.Date(startInUserTZ.Year(), startInUserTZ.Month(), startInUserTZ.Day(), 0, 0, 0, 0, userTimezone)
 	endDay := time.Date(endInUserTZ.Year(), endInUserTZ.Month(), endInUserTZ.Day(), 0, 0, 0, 0, userTimezone)
-	
+
 	for !current.After(endDay) {
 		// Skip weekends if requested
 		if excludeWeekends && (current.Weekday() == time.Saturday || current.Weekday() == time.Sunday) {
@@ -223,4 +313,75 @@ func GetUserWorkingHours(startDate, endDate time.Time, startHour, endHour, lunch
 	}
 
 	return slots
+}
+
+// ValidateCalendarAccess checks which emails have accessible calendars
+func ValidateCalendarAccess(service *calendar.Service, emails []string) []CalendarAccessResult {
+	results := make([]CalendarAccessResult, 0, len(emails))
+
+	for _, email := range emails {
+		result := CalendarAccessResult{
+			Email:     email,
+			HasAccess: false,
+		}
+
+		// Try to get the calendar to check access
+		_, err := service.Calendars.Get(email).Do()
+		if err != nil {
+			result.Error = err
+			result.ErrorReason = categorizeCalendarError(err)
+			log.Debug().Err(err).Str("email", email).Str("reason", result.ErrorReason).Msg("Calendar access check failed")
+		} else {
+			result.HasAccess = true
+		}
+
+		results = append(results, result)
+	}
+
+	return results
+}
+
+// GetMissingCalendars identifies which requested emails don't have calendar data in the response
+func GetMissingCalendars(requestedEmails []string, availabilities []UserAvailability) []string {
+	// Create a map of emails that returned data
+	returnedEmails := make(map[string]bool)
+	for _, avail := range availabilities {
+		returnedEmails[avail.Email] = true
+	}
+
+	// Find which emails are missing
+	var missing []string
+	for _, email := range requestedEmails {
+		if !returnedEmails[email] {
+			missing = append(missing, email)
+		}
+	}
+
+	return missing
+}
+
+// categorizeCalendarError determines the type of calendar access error
+func categorizeCalendarError(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	errStr := err.Error()
+
+	if errStr == "" {
+		return "unknown"
+	}
+
+	// Check for common error patterns
+	if strings.Contains(errStr, "404") || strings.Contains(errStr, "notFound") || strings.Contains(errStr, "Not Found") {
+		return "no_calendar"
+	}
+	if strings.Contains(errStr, "403") || strings.Contains(errStr, "Forbidden") || strings.Contains(errStr, "Permission denied") {
+		return "permission_denied"
+	}
+	if strings.Contains(errStr, "401") || strings.Contains(errStr, "Unauthorized") {
+		return "unauthorized"
+	}
+
+	return "unknown"
 }

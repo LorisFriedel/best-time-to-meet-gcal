@@ -8,6 +8,25 @@ import (
 	directory "google.golang.org/api/admin/directory/v1"
 )
 
+// ResolutionResult represents the result of resolving a single email/group
+type ResolutionResult struct {
+	OriginalEmail string
+	ResolvedTo    []string
+	IsGroup       bool
+	Error         error
+	ErrorType     string // "external_domain", "permission_denied", "not_found", etc.
+}
+
+// ResolutionSummary contains details about the mailing list resolution process
+type ResolutionSummary struct {
+	Results           []ResolutionResult
+	TotalEmails       int
+	ResolvedGroups    int
+	UnresolvedGroups  int
+	ExternalGroups    int
+	IndividualEmails  int
+}
+
 // ResolveMemberEmails takes a list of email addresses (which may include group/mailing list addresses)
 // and returns a list of individual member email addresses
 func ResolveMemberEmails(service *directory.Service, emails []string) ([]string, error) {
@@ -47,6 +66,102 @@ func ResolveMemberEmails(service *directory.Service, emails []string) ([]string,
 	}
 
 	return result, nil
+}
+
+// ResolveMemberEmailsDetailed provides detailed information about the resolution process
+func ResolveMemberEmailsDetailed(service *directory.Service, emails []string) ([]string, *ResolutionSummary) {
+	memberEmails := make(map[string]bool)
+	summary := &ResolutionSummary{
+		Results: make([]ResolutionResult, 0),
+	}
+
+	for _, email := range emails {
+		email = strings.TrimSpace(email)
+		if email == "" {
+			continue
+		}
+
+		result := ResolutionResult{
+			OriginalEmail: email,
+			ResolvedTo:    []string{},
+		}
+
+		// Try to get group members
+		members, err := getGroupMembers(service, email)
+		if err != nil {
+			// Analyze the error to determine the type
+			errorType := categorizeError(err)
+			result.Error = err
+			result.ErrorType = errorType
+			result.IsGroup = false
+			
+			// Treat as individual email
+			memberEmails[email] = true
+			result.ResolvedTo = []string{email}
+			summary.IndividualEmails++
+			
+			if errorType == "external_domain" || errorType == "not_found" {
+				summary.ExternalGroups++
+				summary.UnresolvedGroups++
+			}
+		} else if len(members) > 0 {
+			// Successfully resolved group
+			result.IsGroup = true
+			result.ResolvedTo = members
+			for _, member := range members {
+				memberEmails[member] = true
+			}
+			summary.ResolvedGroups++
+		} else {
+			// Empty result - treat as individual email
+			result.IsGroup = false
+			result.ResolvedTo = []string{email}
+			memberEmails[email] = true
+			summary.IndividualEmails++
+		}
+
+		summary.Results = append(summary.Results, result)
+		summary.TotalEmails++
+	}
+
+	// Convert map to slice
+	allEmails := make([]string, 0, len(memberEmails))
+	for email := range memberEmails {
+		allEmails = append(allEmails, email)
+	}
+
+	return allEmails, summary
+}
+
+// categorizeError determines the type of error from the API response
+func categorizeError(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	errStr := err.Error()
+	
+	// Check for common error patterns
+	if strings.Contains(errStr, "404") || strings.Contains(errStr, "notFound") || strings.Contains(errStr, "Resource Not Found") {
+		return "not_found"
+	}
+	if strings.Contains(errStr, "403") || strings.Contains(errStr, "Forbidden") || strings.Contains(errStr, "Permission denied") {
+		return "permission_denied"
+	}
+	if strings.Contains(errStr, "400") || strings.Contains(errStr, "Bad Request") {
+		return "bad_request"
+	}
+	if strings.Contains(errStr, "Domain not found") || strings.Contains(errStr, "domain") {
+		return "external_domain"
+	}
+	
+	// If it's a 404, it could be external domain or non-existent group
+	// Groups from external domains typically return 404
+	if strings.Contains(errStr, "404") {
+		return "external_domain"
+	}
+
+	return "unknown"
 }
 
 // getGroupMembers retrieves all member email addresses for a given group

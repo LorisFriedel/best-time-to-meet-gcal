@@ -130,6 +130,7 @@ lunch_end_hour: 13
 exclude_weekends: true
 max_slots: 10
 max_conflicts: 30
+batch_size: 50  # Number of calendars per API request (for large groups)
 ```
 
 Then run with fewer command-line arguments:
@@ -436,14 +437,24 @@ The tool can automatically resolve Google Groups (mailing lists) to individual m
   --mailing-lists "leadership@company.com" \
   --start "2024-01-15" \
   --end "2024-01-19"
+
+# Handle very large groups (e.g., 300+ members) with custom batch size
+./best-time-to-meet \
+  --mailing-lists "all-staff@company.com" \
+  --start "2024-01-15" \
+  --end "2024-01-19" \
+  --duration 30 \
+  --batch-size 100  # Process 100 calendars per API request
 ```
 
 ### Notes on Mailing Lists
 
 - The tool automatically handles nested groups (groups within groups)
 - Duplicate members are automatically removed
-- If a mailing list can't be resolved (e.g., external or no permissions), it's treated as an individual email
-- Large mailing lists may take a few seconds to resolve
+- **Large groups (200+ members)**: Automatically processed in batches to work around Google Calendar API limitations
+- **External mailing lists**: Groups from external domains (not your Google Workspace) cannot be resolved and have no calendar data
+- When a mailing list can't be resolved, you'll receive a detailed error message with suggestions
+- Use `--batch-size` to adjust the number of calendars processed per API request (default: 50)
 
 ## Tips for Best Results
 
@@ -480,9 +491,27 @@ The tool can automatically resolve Google Groups (mailing lists) to individual m
 - The tool will automatically prompt for re-authentication
 
 ### Mailing list issues
-- **"insufficient permissions to read group members"**: Your account needs "Groups Reader" role in Google Workspace Admin
-- **"Could not get members for [group]"**: The group might be external or you lack permissions
-- **Groups not resolving**: Delete `token.json` and re-authenticate to get the new directory scopes
+
+#### "insufficient permissions to read group members"
+Your account needs "Groups Reader" role in Google Workspace Admin to access group membership information.
+
+#### "Could not resolve mailing list - may be external domain"
+This means the mailing list is from an external organization (e.g., a partner company) or doesn't exist in your Google Workspace domain. 
+
+**Solutions:**
+- Request individual member email addresses from the group owner
+- Use the `--emails` flag instead with comma-separated individual addresses
+- For mixed internal/external: Use both `--mailing-lists` for internal groups and `--emails` for external individuals
+
+#### No calendar data available
+If you get "No calendar data could be retrieved for any attendees":
+1. **External groups**: Group email addresses don't have calendars. You need individual member emails.
+2. **Large groups (200+ members)**: Google Calendar API cannot process groups with more than 200 members in a single request. The tool now automatically handles this by batching requests.
+3. **Calendar sharing**: Calendars must be shared with you (at minimum "free/busy" visibility).
+4. **Wrong domain**: Verify the email addresses are from domains you have access to.
+
+#### Groups not resolving
+Delete `token.json` and re-authenticate to get the new directory scopes.
 
 ## Privacy & Security
 
