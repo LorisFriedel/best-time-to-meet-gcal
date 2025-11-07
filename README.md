@@ -34,14 +34,15 @@ go mod download
 go build -o best-time-to-meet
 ```
 
-### 2. Set Up Google Calendar API
+### 2. Set Up Google APIs
 
 1. Go to the [Google Cloud Console](https://console.cloud.google.com/)
 2. Create a new project or select an existing one
-3. Enable the Google Calendar API:
+3. Enable required APIs:
    - Go to "APIs & Services" > "Enable APIs and Services"
-   - Search for "Google Calendar API"
-   - Click "Enable"
+   - Search and enable these APIs:
+     - **Google Calendar API** (for calendar access)
+     - **Admin SDK API** (for mailing list/group support)
 
 ### 3. Create OAuth 2.0 Credentials
 
@@ -65,6 +66,46 @@ On first run, the tool will:
 2. Ask you to visit the URL and authorize the application
 3. Provide an authorization code to paste back into the terminal
 4. Save the token for future use
+
+### 5. Additional Setup for Mailing List Support
+
+To use mailing lists/Google Groups, you need additional permissions:
+
+#### Google Workspace Admin Permissions
+
+If your organization uses Google Workspace:
+
+1. **Option A: Request Groups Reader Role** (Recommended)
+   - Ask your Google Workspace administrator to grant you the "Groups Reader" role
+   - This allows you to read group membership for all groups in your domain
+
+2. **Option B: Custom Role**
+   - Your admin can create a custom role with these privileges:
+     - Groups → Read
+     - Organization Units → Read
+
+#### Common Setup Issues
+
+- **Missing Admin SDK API**: Many users forget to enable the Admin SDK API (not just Calendar API)
+- **Wrong OAuth Scopes**: The OAuth consent screen must include directory scopes, not just calendar
+- **No Workspace Permissions**: Personal Gmail accounts cannot read Google Groups membership
+- **External Groups**: Groups from other organizations cannot be expanded (e.g., `group@external-company.com`)
+
+#### Verify Your Setup
+
+After setup, verify everything is configured correctly:
+
+1. **Check OAuth Scopes**: In Google Cloud Console → APIs & Services → OAuth consent screen → Scopes
+   - Must include: `admin.directory.group.member.readonly` and `admin.directory.group.readonly`
+
+2. **Check Enabled APIs**: In Google Cloud Console → APIs & Services → Library
+   - Both "Google Calendar API" and "Admin SDK API" must be enabled
+
+3. **Re-authenticate**: After any permission changes
+   ```bash
+   rm token.json
+   ./best-time-to-meet --mailing-lists "your-group@company.com" --start "2024-01-15" --end "2024-01-19"
+   ```
 
 ## Usage
 
@@ -456,6 +497,15 @@ The tool can automatically resolve Google Groups (mailing lists) to individual m
 - When a mailing list can't be resolved, you'll receive a detailed error message with suggestions
 - Use `--batch-size` to adjust the number of calendars processed per API request (default: 50)
 
+### Requirements for Mailing Lists
+
+1. **Google Workspace**: Mailing list resolution requires access to Google Workspace Admin Directory API
+2. **Permissions**: Your Google account needs permission to read group members:
+   - For Google Workspace domains: Request "Groups Reader" role from your admin
+   - OAuth consent screen must include the directory scopes listed above
+3. **APIs Enabled**: Both Calendar API and Admin SDK API must be enabled in Google Cloud Console
+4. **Token Update**: If you previously authenticated without directory scopes, delete `token.json` and re-authenticate
+
 ## Tips for Best Results
 
 1. **Time Zones**: The tool automatically detects each attendee's calendar timezone and considers it when finding optimal meeting times. Meeting slots are scored based on how well they fit into everyone's local working hours. Times are displayed in the timezone specified by the `--timezone` parameter (or your local timezone if not specified).
@@ -493,7 +543,35 @@ The tool can automatically resolve Google Groups (mailing lists) to individual m
 ### Mailing list issues
 
 #### "insufficient permissions to read group members"
-Your account needs "Groups Reader" role in Google Workspace Admin to access group membership information.
+
+This error means your account cannot read group membership. To fix:
+
+1. **In Google Cloud Console**:
+   - Go to APIs & Services → Library
+   - Ensure "Admin SDK API" is enabled (not just Calendar API)
+   - Go to OAuth consent screen → Scopes
+   - Verify these scopes are added:
+     - `admin.directory.group.member.readonly`
+     - `admin.directory.group.readonly`
+
+2. **In Google Workspace Admin** (or ask your admin):
+   - Grant yourself the "Groups Reader" role
+   - Or create a custom role with Groups → Read permission
+
+3. **Re-authenticate**:
+   ```bash
+   rm token.json
+   ./best-time-to-meet --mailing-lists "your-group@company.com" --start "2024-01-15" --end "2024-01-19"
+   ```
+
+4. **Check API Quotas**:
+   - In Google Cloud Console → APIs & Services → Quotas
+   - Look for Admin SDK API quotas
+   - Ensure you haven't exceeded any limits
+
+If you don't have admin access, you'll need to either:
+- Ask your IT administrator for the necessary permissions
+- Export group members manually and use `--emails` instead
 
 #### "Could not resolve mailing list - may be external domain"
 This means the mailing list is from an external organization (e.g., a partner company) or doesn't exist in your Google Workspace domain. 
