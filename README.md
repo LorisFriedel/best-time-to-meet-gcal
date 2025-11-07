@@ -14,6 +14,7 @@ A Go command-line tool that analyzes multiple Google Calendars to find optimal m
 - **Batch Analysis**: Check availability for multiple days at once
 - **Conflict Threshold**: Filter results by maximum acceptable conflict percentage
 - **Conflict Types**: Distinguishes between calendar conflicts (busy times) and working hours conflicts
+- **JSON Output**: Export results in JSON format for easy integration with other tools and automation
 
 ## Prerequisites
 
@@ -110,7 +111,8 @@ On first run, the tool will:
   --exclude-weekends \                                # Skip weekends (default: true)
   --max-conflicts 30 \                                # Max conflict % to show (default: 100)
   --credentials "credentials.json" \                  # Path to Google credentials
-  --debug                                             # Enable debug logging
+  --debug \                                           # Enable debug logging
+  --json                                              # Output results in JSON format
 ```
 
 ### Using Configuration File
@@ -238,6 +240,158 @@ Working hours: 9:00 - 17:00 (in each attendee's local time)
    This slot has perfect attendance with all attendees available!
    (This matches the best option shown above)
 ================================================================================
+```
+
+## JSON Output
+
+The tool supports JSON output for easy integration with other software, automated workflows, or custom visualization tools. Simply add the `--json` flag to get structured data instead of the human-readable format.
+
+### Basic Usage
+
+```bash
+./best-time-to-meet \
+  --emails "alice@company.com,bob@company.com" \
+  --start "2024-01-15" \
+  --end "2024-01-19" \
+  --duration 60 \
+  --json
+```
+
+### JSON Output Structure
+
+The JSON output includes all the information from the human-readable format in a structured format:
+
+```json
+{
+  "metadata": {
+    "search_start_date": "2024-01-15",
+    "search_end_date": "2024-01-19",
+    "meeting_duration_minutes": 60,
+    "total_attendees": 3,
+    "accessible_calendars": 3,
+    "working_hours": "9:00 - 17:00",
+    "lunch_hours": "12:00 - 13:00",
+    "exclude_weekends": true,
+    "max_conflicts_percentage": 100,
+    "timezone": "America/New_York"
+  },
+  "summary": {
+    "total_slots_found": 10,
+    "perfect_slots": 3,
+    "low_conflict_slots": 5,
+    "medium_conflict_slots": 2
+  },
+  "timezone_info": {
+    "attendees_by_timezone": {
+      "America/New_York": ["alice@company.com", "bob@company.com"],
+      "Europe/London": ["charlie@company.com"]
+    },
+    "working_hours_note": "9:00 - 17:00 (in each attendee's local time)"
+  },
+  "best_options": {
+    "perfect_slots": [
+      {
+        "start_time": "2024-01-15T14:00:00-05:00",
+        "end_time": "2024-01-15T15:00:00-05:00",
+        "conflict_percentage": 0,
+        "conflict_count": 0
+      }
+    ],
+    "good_options": [
+      {
+        "start_time": "2024-01-16T10:00:00-05:00",
+        "end_time": "2024-01-16T11:00:00-05:00",
+        "conflict_percentage": 25,
+        "conflict_count": 1
+      }
+    ]
+  },
+  "daily_summary": [
+    {
+      "date": "2024-01-15",
+      "total_slots": 4,
+      "perfect_slots": 2,
+      "best_conflict_percentage": 0,
+      "average_conflict_percentage": 25,
+      "earliest_slot_time": "09:00",
+      "latest_slot_time": "16:00"
+    }
+  ],
+  "detailed_slots": [
+    {
+      "start_time": "2024-01-15T14:00:00-05:00",
+      "end_time": "2024-01-15T15:00:00-05:00",
+      "conflict_percentage": 0,
+      "unavailable_count": 0,
+      "unavailable_emails": [],
+      "available_emails": ["alice@company.com", "bob@company.com", "charlie@company.com"],
+      "timezone_score": 100,
+      "conflicts_by_type": {
+        "calendar": [],
+        "working_hours": []
+      }
+    }
+  ],
+  "recommendation": {
+    "start_time": "2024-01-15T14:00:00-05:00",
+    "end_time": "2024-01-15T15:00:00-05:00",
+    "conflict_percentage": 0,
+    "unavailable_count": 0,
+    "calendar_conflicts": 0,
+    "working_hours_conflicts": 0,
+    "reason": "Perfect slot with all attendees available"
+  }
+}
+```
+
+### JSON Fields Description
+
+- **metadata**: Search parameters and configuration used
+- **summary**: High-level statistics about available slots
+- **timezone_info**: Breakdown of attendees by timezone
+- **best_options**: Top meeting slots categorized by quality
+  - `perfect_slots`: No conflicts (up to 5 slots)
+  - `good_options`: Low conflicts, 1-25% (up to 5 slots)
+- **daily_summary**: Statistics grouped by day
+- **detailed_slots**: Complete list of all found slots with full details
+- **recommendation**: The single best recommended slot with reasoning
+
+### Integration Examples
+
+#### Process with jq
+```bash
+# Get just the recommended meeting time
+./best-time-to-meet --emails "..." --start "..." --end "..." --json | jq -r '.recommendation.start_time'
+
+# List all perfect slots
+./best-time-to-meet --emails "..." --start "..." --end "..." --json | jq -r '.best_options.perfect_slots[] | "\(.start_time) - \(.end_time)"'
+
+# Count slots by day
+./best-time-to-meet --emails "..." --start "..." --end "..." --json | jq '.daily_summary[] | "\(.date): \(.total_slots) slots"'
+```
+
+#### Python Integration
+```python
+import subprocess
+import json
+import datetime
+
+# Run the tool and parse JSON output
+result = subprocess.run([
+    './best-time-to-meet',
+    '--emails', 'alice@company.com,bob@company.com',
+    '--start', '2024-01-15',
+    '--end', '2024-01-19',
+    '--json'
+], capture_output=True, text=True)
+
+data = json.loads(result.stdout)
+
+# Process the recommendation
+if data['recommendation']:
+    start_time = datetime.datetime.fromisoformat(data['recommendation']['start_time'])
+    print(f"Best meeting time: {start_time}")
+    print(f"Conflicts: {data['recommendation']['conflict_percentage']}%")
 ```
 
 ## Timezone-Aware Scheduling

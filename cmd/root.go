@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -34,7 +35,95 @@ var (
 	excludeWeekends bool
 	maxConflicts    float64
 	debug           bool
+	jsonOutput      bool
 )
+
+// JSONOutput represents the complete output in JSON format
+type JSONOutput struct {
+	Metadata       OutputMetadata      `json:"metadata"`
+	Summary        Summary             `json:"summary"`
+	TimezoneInfo   TimezoneInfo        `json:"timezone_info"`
+	BestOptions    BestOptions         `json:"best_options"`
+	DailySummary   []DailySummary      `json:"daily_summary"`
+	DetailedSlots  []DetailedTimeSlot  `json:"detailed_slots"`
+	Recommendation *RecommendationSlot `json:"recommendation"`
+}
+
+// OutputMetadata contains metadata about the search
+type OutputMetadata struct {
+	SearchStartDate     string  `json:"search_start_date"`
+	SearchEndDate       string  `json:"search_end_date"`
+	MeetingDuration     int     `json:"meeting_duration_minutes"`
+	TotalAttendees      int     `json:"total_attendees"`
+	AccessibleCalendars int     `json:"accessible_calendars"`
+	WorkingHours        string  `json:"working_hours"`
+	LunchHours          string  `json:"lunch_hours"`
+	ExcludeWeekends     bool    `json:"exclude_weekends"`
+	MaxConflicts        float64 `json:"max_conflicts_percentage"`
+	Timezone            string  `json:"timezone"`
+}
+
+// Summary contains high-level statistics
+type Summary struct {
+	TotalSlotsFound     int `json:"total_slots_found"`
+	PerfectSlots        int `json:"perfect_slots"`
+	LowConflictSlots    int `json:"low_conflict_slots"`
+	MediumConflictSlots int `json:"medium_conflict_slots"`
+}
+
+// TimezoneInfo contains timezone information for attendees
+type TimezoneInfo struct {
+	AttendeesByTimezone map[string][]string `json:"attendees_by_timezone"`
+	WorkingHoursNote    string              `json:"working_hours_note"`
+}
+
+// BestOptions contains categorized best meeting options
+type BestOptions struct {
+	PerfectSlots []TimeSlotSummary `json:"perfect_slots"`
+	GoodOptions  []TimeSlotSummary `json:"good_options"`
+}
+
+// TimeSlotSummary is a simplified view of a time slot
+type TimeSlotSummary struct {
+	StartTime          string  `json:"start_time"`
+	EndTime            string  `json:"end_time"`
+	ConflictPercentage float64 `json:"conflict_percentage"`
+	ConflictCount      int     `json:"conflict_count"`
+}
+
+// DailySummary contains summary statistics for a day
+type DailySummary struct {
+	Date             string  `json:"date"`
+	TotalSlots       int     `json:"total_slots"`
+	PerfectSlots     int     `json:"perfect_slots"`
+	BestConflict     float64 `json:"best_conflict_percentage"`
+	AverageConflict  float64 `json:"average_conflict_percentage"`
+	EarliestSlotTime string  `json:"earliest_slot_time"`
+	LatestSlotTime   string  `json:"latest_slot_time"`
+}
+
+// DetailedTimeSlot contains detailed information about a time slot
+type DetailedTimeSlot struct {
+	StartTime          string              `json:"start_time"`
+	EndTime            string              `json:"end_time"`
+	ConflictPercentage float64             `json:"conflict_percentage"`
+	UnavailableCount   int                 `json:"unavailable_count"`
+	UnavailableEmails  []string            `json:"unavailable_emails"`
+	AvailableEmails    []string            `json:"available_emails"`
+	TimeZoneScore      float64             `json:"timezone_score"`
+	ConflictsByType    map[string][]string `json:"conflicts_by_type"`
+}
+
+// RecommendationSlot contains the recommended meeting slot
+type RecommendationSlot struct {
+	StartTime             string  `json:"start_time"`
+	EndTime               string  `json:"end_time"`
+	ConflictPercentage    float64 `json:"conflict_percentage"`
+	UnavailableCount      int     `json:"unavailable_count"`
+	CalendarConflicts     int     `json:"calendar_conflicts"`
+	WorkingHoursConflicts int     `json:"working_hours_conflicts"`
+	Reason                string  `json:"reason"`
+}
 
 var rootCmd = &cobra.Command{
 	Use:   "best-time-to-meet",
@@ -72,6 +161,7 @@ func init() {
 	rootCmd.Flags().BoolVarP(&excludeWeekends, "exclude-weekends", "w", true, "Exclude weekends from search")
 	rootCmd.Flags().Float64VarP(&maxConflicts, "max-conflicts", "c", 100, "Maximum conflict percentage to display (0-100)")
 	rootCmd.Flags().BoolVar(&debug, "debug", false, "Enable debug logging")
+	rootCmd.Flags().BoolVar(&jsonOutput, "json", false, "Output results in JSON format")
 
 	// At least one of emails or mailing-lists is required
 	rootCmd.MarkFlagRequired("start")
@@ -93,6 +183,7 @@ func init() {
 	viper.BindPFlag("exclude_weekends", rootCmd.Flags().Lookup("exclude-weekends"))
 	viper.BindPFlag("max_conflicts", rootCmd.Flags().Lookup("max-conflicts"))
 	viper.BindPFlag("debug", rootCmd.Flags().Lookup("debug"))
+	viper.BindPFlag("json_output", rootCmd.Flags().Lookup("json"))
 }
 
 func initConfig() {
@@ -320,7 +411,38 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 
 	// Display results
 	if len(filteredSlots) == 0 {
-		fmt.Println("No suitable meeting times found within the specified constraints.")
+		if viper.GetBool("json_output") {
+			output := JSONOutput{
+				Metadata: OutputMetadata{
+					SearchStartDate:     startTime.Format("2006-01-02"),
+					SearchEndDate:       endTime.Format("2006-01-02"),
+					MeetingDuration:     viper.GetInt("duration"),
+					TotalAttendees:      len(emailList),
+					AccessibleCalendars: len(availabilities),
+					WorkingHours:        fmt.Sprintf("%d:00 - %d:00", viper.GetInt("start_hour"), viper.GetInt("end_hour")),
+					LunchHours:          fmt.Sprintf("%d:00 - %d:00", viper.GetInt("lunch_start_hour"), viper.GetInt("lunch_end_hour")),
+					ExcludeWeekends:     viper.GetBool("exclude_weekends"),
+					MaxConflicts:        viper.GetFloat64("max_conflicts"),
+					Timezone:            loc.String(),
+				},
+				Summary: Summary{
+					TotalSlotsFound: 0,
+				},
+			}
+			jsonData, err := json.MarshalIndent(output, "", "  ")
+			if err != nil {
+				log.Fatal().Err(err).Msg("Failed to marshal JSON output")
+			}
+			fmt.Println(string(jsonData))
+		} else {
+			fmt.Println("No suitable meeting times found within the specified constraints.")
+		}
+		return
+	}
+
+	// Check for JSON output mode
+	if viper.GetBool("json_output") {
+		outputJSON(availabilities, filteredSlots, optimalSlots, emailList, startTime, endTime, loc)
 		return
 	}
 
@@ -552,4 +674,181 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 		}
 	}
 	fmt.Println(strings.Repeat("=", 80))
+}
+
+// outputJSON outputs the results in JSON format
+func outputJSON(availabilities []calendar.UserAvailability, filteredSlots []optimizer.MeetingSlot,
+	allSlots []optimizer.MeetingSlot, emailList []string, startTime, endTime time.Time, loc *time.Location) {
+
+	output := JSONOutput{
+		Metadata: OutputMetadata{
+			SearchStartDate:     startTime.Format("2006-01-02"),
+			SearchEndDate:       endTime.Format("2006-01-02"),
+			MeetingDuration:     viper.GetInt("duration"),
+			TotalAttendees:      len(emailList),
+			AccessibleCalendars: len(availabilities),
+			WorkingHours:        fmt.Sprintf("%d:00 - %d:00", viper.GetInt("start_hour"), viper.GetInt("end_hour")),
+			LunchHours:          fmt.Sprintf("%d:00 - %d:00", viper.GetInt("lunch_start_hour"), viper.GetInt("lunch_end_hour")),
+			ExcludeWeekends:     viper.GetBool("exclude_weekends"),
+			MaxConflicts:        viper.GetFloat64("max_conflicts"),
+			Timezone:            loc.String(),
+		},
+	}
+
+	// Prepare timezone info
+	tzMap := make(map[string][]string)
+	for _, avail := range availabilities {
+		tzName := "Unknown"
+		if avail.TimeZone != nil {
+			tzName = avail.TimeZone.String()
+		}
+		tzMap[tzName] = append(tzMap[tzName], avail.Email)
+	}
+
+	output.TimezoneInfo = TimezoneInfo{
+		AttendeesByTimezone: tzMap,
+		WorkingHoursNote: fmt.Sprintf("%d:00 - %d:00 (in each attendee's local time)",
+			viper.GetInt("start_hour"), viper.GetInt("end_hour")),
+	}
+
+	// Group slots by conflict level
+	conflictGroups := optimizer.GroupSlotsByConflictLevel(filteredSlots)
+
+	// Prepare summary
+	output.Summary = Summary{
+		TotalSlotsFound:     len(filteredSlots),
+		PerfectSlots:        len(conflictGroups["no-conflicts"]),
+		LowConflictSlots:    len(conflictGroups["low-conflicts"]),
+		MediumConflictSlots: len(conflictGroups["med-conflicts"]),
+	}
+
+	// Prepare best options
+	output.BestOptions = BestOptions{
+		PerfectSlots: []TimeSlotSummary{},
+		GoodOptions:  []TimeSlotSummary{},
+	}
+
+	// Add perfect slots (up to 5)
+	maxPerfect := 5
+	if len(conflictGroups["no-conflicts"]) < maxPerfect {
+		maxPerfect = len(conflictGroups["no-conflicts"])
+	}
+	for i := 0; i < maxPerfect; i++ {
+		slot := conflictGroups["no-conflicts"][i]
+		output.BestOptions.PerfectSlots = append(output.BestOptions.PerfectSlots, TimeSlotSummary{
+			StartTime:          slot.TimeSlot.Start.Format("2006-01-02T15:04:05Z07:00"),
+			EndTime:            slot.TimeSlot.End.Format("2006-01-02T15:04:05Z07:00"),
+			ConflictPercentage: slot.ConflictPercentage,
+			ConflictCount:      slot.UnavailableCount,
+		})
+	}
+
+	// Add good options (up to 5)
+	maxGood := 5
+	if len(conflictGroups["low-conflicts"]) < maxGood {
+		maxGood = len(conflictGroups["low-conflicts"])
+	}
+	for i := 0; i < maxGood; i++ {
+		slot := conflictGroups["low-conflicts"][i]
+		output.BestOptions.GoodOptions = append(output.BestOptions.GoodOptions, TimeSlotSummary{
+			StartTime:          slot.TimeSlot.Start.Format("2006-01-02T15:04:05Z07:00"),
+			EndTime:            slot.TimeSlot.End.Format("2006-01-02T15:04:05Z07:00"),
+			ConflictPercentage: slot.ConflictPercentage,
+			ConflictCount:      slot.UnavailableCount,
+		})
+	}
+
+	// Prepare daily summary
+	grouped := optimizer.GroupSlotsByDay(filteredSlots)
+	var days []string
+	for day := range grouped {
+		days = append(days, day)
+	}
+	sort.Strings(days)
+
+	for _, day := range days {
+		slots := grouped[day]
+		bestConflict, avgConflict, perfectCount, _ := optimizer.GetDaySummaryStats(slots)
+
+		// Find earliest and latest slots
+		earliest := slots[0].TimeSlot.Start
+		latest := slots[0].TimeSlot.End
+		for _, s := range slots {
+			if s.TimeSlot.Start.Before(earliest) {
+				earliest = s.TimeSlot.Start
+			}
+			if s.TimeSlot.End.After(latest) {
+				latest = s.TimeSlot.End
+			}
+		}
+
+		output.DailySummary = append(output.DailySummary, DailySummary{
+			Date:             day,
+			TotalSlots:       len(slots),
+			PerfectSlots:     perfectCount,
+			BestConflict:     bestConflict,
+			AverageConflict:  avgConflict,
+			EarliestSlotTime: earliest.Format("15:04"),
+			LatestSlotTime:   latest.Format("15:04"),
+		})
+	}
+
+	// Prepare detailed slots
+	for _, slot := range filteredSlots {
+		output.DetailedSlots = append(output.DetailedSlots, DetailedTimeSlot{
+			StartTime:          slot.TimeSlot.Start.Format("2006-01-02T15:04:05Z07:00"),
+			EndTime:            slot.TimeSlot.End.Format("2006-01-02T15:04:05Z07:00"),
+			ConflictPercentage: slot.ConflictPercentage,
+			UnavailableCount:   slot.UnavailableCount,
+			UnavailableEmails:  slot.UnavailableEmails,
+			AvailableEmails:    slot.AvailableEmails,
+			TimeZoneScore:      slot.TimeZoneScore,
+			ConflictsByType:    slot.ConflictsByType,
+		})
+	}
+
+	// Find the best recommendation
+	if len(filteredSlots) > 0 {
+		bestSlot := filteredSlots[0]
+		for _, slot := range filteredSlots {
+			if slot.ConflictPercentage < bestSlot.ConflictPercentage {
+				bestSlot = slot
+			} else if slot.ConflictPercentage == bestSlot.ConflictPercentage {
+				currentWorkingHoursConflicts := len(slot.ConflictsByType["working_hours"])
+				bestWorkingHoursConflicts := len(bestSlot.ConflictsByType["working_hours"])
+
+				if currentWorkingHoursConflicts < bestWorkingHoursConflicts {
+					bestSlot = slot
+				} else if currentWorkingHoursConflicts == bestWorkingHoursConflicts {
+					if slot.TimeSlot.Start.Before(bestSlot.TimeSlot.Start) {
+						bestSlot = slot
+					}
+				}
+			}
+		}
+
+		reason := "Best overall slot with lowest conflicts"
+		if bestSlot.UnavailableCount == 0 {
+			reason = "Perfect slot with all attendees available"
+		} else if bestSlot.ConflictPercentage <= 25 {
+			reason = "Good slot with minimal conflicts"
+		}
+
+		output.Recommendation = &RecommendationSlot{
+			StartTime:             bestSlot.TimeSlot.Start.Format("2006-01-02T15:04:05Z07:00"),
+			EndTime:               bestSlot.TimeSlot.End.Format("2006-01-02T15:04:05Z07:00"),
+			ConflictPercentage:    bestSlot.ConflictPercentage,
+			UnavailableCount:      bestSlot.UnavailableCount,
+			CalendarConflicts:     len(bestSlot.ConflictsByType["calendar"]),
+			WorkingHoursConflicts: len(bestSlot.ConflictsByType["working_hours"]),
+			Reason:                reason,
+		}
+	}
+
+	// Marshal and output JSON
+	jsonData, err := json.MarshalIndent(output, "", "  ")
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to marshal JSON output")
+	}
+	fmt.Println(string(jsonData))
 }
