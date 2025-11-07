@@ -9,10 +9,11 @@ A Go command-line tool that analyzes multiple Google Calendars to find optimal m
 - **Mailing List Support**: Automatically resolves Google Groups/mailing lists to individual members
 - **Customizable Working Hours**: Set preferred meeting hours and exclude weekends
 - **Lunch Time Exclusion**: Automatically avoids scheduling during lunch hours
-- **Timezone-Aware Scheduling**: Automatically detects each attendee's timezone and optimizes meeting times to fit everyone's working hours
-- **Flexible Duration**: Support for meetings of any duration
+- **Timezone-Aware Scheduling**: Automatically detects each attendee's timezone and counts being outside working hours as a conflict
+- **Flexible Duration**: Support for meetings of any duration  
 - **Batch Analysis**: Check availability for multiple days at once
 - **Conflict Threshold**: Filter results by maximum acceptable conflict percentage
+- **Conflict Types**: Distinguishes between calendar conflicts (busy times) and working hours conflicts
 
 ## Prerequisites
 
@@ -201,15 +202,15 @@ Working hours: 9:00 - 17:00 (in each attendee's local time)
 📊 AVAILABILITY SUMMARY BY DAY:
 
 📆 Mon, Jan 15
-   Total slots: 4 | Perfect slots: 2 | Best conflict: 0% | Avg: 25% | Best TZ score: 100%
+   Total slots: 4 | Perfect slots: 2 | Best conflict: 0% | Avg: 25%
    Time range: 09:00 - 16:00
 
 📆 Tue, Jan 16
-   Total slots: 3 | Perfect slots: 0 | Best conflict: 25% | Avg: 33% | Best TZ score: 100%
+   Total slots: 3 | Perfect slots: 0 | Best conflict: 25% | Avg: 33%
    Time range: 10:00 - 16:30
 
 📆 Wed, Jan 17
-   Total slots: 3 | Perfect slots: 1 | Best conflict: 0% | Avg: 22% | Best TZ score: 90%
+   Total slots: 3 | Perfect slots: 0 | Best conflict: 10% | Avg: 28%
    Time range: 09:30 - 16:00
 
 --------------------------------------------------------------------------------
@@ -221,15 +222,15 @@ Working hours: 9:00 - 17:00 (in each attendee's local time)
 
 2. Mon, Jan 15, 2024 at 15:00 - 16:00 ✅ Perfect - All attendees available!
 
-3. Wed, Jan 17, 2024 at 09:30 - 10:30 ✅ Perfect - All attendees available! (TZ Score: 90%)
-   ⏰ Outside working hours for: george@company.com
+3. Wed, Jan 17, 2024 at 09:30 - 10:30 🟡 10% conflict
+   ⏰ Outside working hours (1): george@company.com
 
-4. Tue, Jan 16, 2024 at 10:00 - 11:00 🟡 25% conflict | TZ Score: 100%
-   Unavailable (1/3): bob@company.com
+4. Tue, Jan 16, 2024 at 10:00 - 11:00 🟡 25% conflict
+   📅 Calendar conflicts (1): bob@company.com
 
-5. Wed, Jan 17, 2024 at 15:30 - 16:30 ⚠️ 33% conflict | TZ Score: 80%
-   Unavailable (1/3): charlie@company.com
-   ⏰ Outside working hours for: helen@company.com
+5. Wed, Jan 17, 2024 at 15:30 - 16:30 ⚠️ 40% conflict
+   📅 Calendar conflicts (1): charlie@company.com
+   ⏰ Outside working hours (1): helen@company.com
 
 ================================================================================
 💡 RECOMMENDATION:
@@ -241,17 +242,17 @@ Working hours: 9:00 - 17:00 (in each attendee's local time)
 
 ## Timezone-Aware Scheduling
 
-The tool automatically detects each attendee's calendar timezone and optimizes meeting times accordingly:
+The tool automatically detects each attendee's calendar timezone and ensures meetings are scheduled within everyone's working hours:
 
 1. **Automatic Detection**: Fetches timezone from each Google Calendar
-2. **Working Hours Adjustment**: Applies the same working hours (e.g., 9 AM - 5 PM) but in each attendee's local timezone
-3. **Smart Scoring**: Each meeting slot gets a "Timezone Score" (0-100%) indicating what percentage of available attendees would be within their working hours
-4. **Daily Summary**: The "AVAILABILITY SUMMARY BY DAY" now shows the best timezone score for each day, helping you identify days with the most timezone-friendly options
-5. **Combined Optimization**: Final ranking considers both:
-   - Calendar conflicts (70% weight)
-   - Timezone compatibility (30% weight)
+2. **Working Hours Enforcement**: Being outside working hours (e.g., 9 AM - 5 PM in their local timezone) is counted as a conflict
+3. **Conflict Types**: The tool clearly distinguishes between:
+   - 📅 Calendar conflicts: When someone has another meeting
+   - ⏰ Working hours conflicts: When the time falls outside someone's working hours
+4. **Unified Conflict Percentage**: Both types of conflicts contribute to the overall conflict percentage
+5. **Smart Prioritization**: When conflict percentages are equal, slots with fewer working hours violations are preferred
 
-This ensures meetings are scheduled at times that work well for distributed teams across different time zones.
+This ensures meetings are scheduled at times that respect everyone's working hours across different time zones, treating timezone incompatibility as seriously as calendar conflicts.
 
 ## Mailing List Support
 

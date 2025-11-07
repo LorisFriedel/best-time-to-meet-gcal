@@ -14,8 +14,9 @@ type MeetingSlot struct {
 	UnavailableEmails   []string
 	AvailableEmails     []string
 	ConflictPercentage  float64
-	TimeZoneScore       float64         // Score indicating how well the time works across timezones (0-100, higher is better)
-	OutsideWorkingHours map[string]bool // Email -> true if outside their working hours
+	TimeZoneScore       float64             // Score indicating how well the time works across timezones (0-100, higher is better)
+	OutsideWorkingHours map[string]bool     // Email -> true if outside their working hours
+	ConflictsByType     map[string][]string // Type -> list of emails (types: "calendar", "working_hours")
 }
 
 // FindOptimalMeetingSlots finds the best meeting times based on availability (legacy version)
@@ -70,6 +71,7 @@ func findOptimalMeetingSlotsLegacy(
 				UnavailableEmails:  unavailable,
 				AvailableEmails:    available,
 				ConflictPercentage: conflictPercentage,
+				ConflictsByType:    map[string][]string{"calendar": unavailable},
 			})
 
 			// Move to next slot (30-minute increments)
@@ -111,38 +113,43 @@ func FindOptimalMeetingSlots(
 		for currentStart.Add(meetingDuration).Before(slot.End) || currentStart.Add(meetingDuration).Equal(slot.End) {
 			meetingEnd := currentStart.Add(meetingDuration)
 
-			// Check conflicts and timezone compatibility for this meeting slot
+			// Check conflicts for this meeting slot
 			unavailable := []string{}
 			available := []string{}
 			outsideWorkingHours := make(map[string]bool)
-			workingHoursCount := 0
+			conflictsByType := map[string][]string{
+				"calendar":      {},
+				"working_hours": {},
+			}
 
 			for _, userAvail := range availabilities {
-				hasConflict := false
-				for _, busySlot := range userAvail.BusySlots {
-					// Check if the meeting overlaps with this busy slot
-					if overlaps(currentStart, meetingEnd, busySlot.Start, busySlot.End) {
-						hasConflict = true
-						break
+				isUnavailable := false
+				conflictType := ""
+
+				// First check if it's within their working hours (only if we have timezone info)
+				if userAvail.TimeZone != nil && !isWithinWorkingHours(currentStart, meetingEnd, userAvail.TimeZone, workingHours) {
+					isUnavailable = true
+					conflictType = "working_hours"
+					outsideWorkingHours[userAvail.Email] = true
+				}
+
+				// Then check calendar conflicts (only if not already unavailable due to working hours)
+				if !isUnavailable {
+					for _, busySlot := range userAvail.BusySlots {
+						// Check if the meeting overlaps with this busy slot
+						if overlaps(currentStart, meetingEnd, busySlot.Start, busySlot.End) {
+							isUnavailable = true
+							conflictType = "calendar"
+							break
+						}
 					}
 				}
 
-				if hasConflict {
+				if isUnavailable {
 					unavailable = append(unavailable, userAvail.Email)
+					conflictsByType[conflictType] = append(conflictsByType[conflictType], userAvail.Email)
 				} else {
 					available = append(available, userAvail.Email)
-
-					// Check if this time is within user's working hours
-					if userAvail.TimeZone != nil {
-						if isWithinWorkingHours(currentStart, meetingEnd, userAvail.TimeZone, workingHours) {
-							workingHoursCount++
-						} else {
-							outsideWorkingHours[userAvail.Email] = true
-						}
-					} else {
-						// If no timezone info, assume it's within working hours
-						workingHoursCount++
-					}
 				}
 			}
 
@@ -152,10 +159,12 @@ func FindOptimalMeetingSlots(
 				conflictPercentage = float64(len(unavailable)) / float64(totalUsers) * 100
 			}
 
-			// Calculate timezone score (percentage of available users for whom this is within working hours)
+			// Calculate timezone score based on all users (not just available ones)
+			// This represents what percentage of users would be within working hours
+			workingHoursCount := totalUsers - len(conflictsByType["working_hours"])
 			timezoneScore := 100.0
-			if len(available) > 0 {
-				timezoneScore = float64(workingHoursCount) / float64(len(available)) * 100
+			if totalUsers > 0 {
+				timezoneScore = float64(workingHoursCount) / float64(totalUsers) * 100
 			}
 
 			meetingSlots = append(meetingSlots, MeetingSlot{
@@ -169,6 +178,7 @@ func FindOptimalMeetingSlots(
 				ConflictPercentage:  conflictPercentage,
 				TimeZoneScore:       timezoneScore,
 				OutsideWorkingHours: outsideWorkingHours,
+				ConflictsByType:     conflictsByType,
 			})
 
 			// Move to next slot (30-minute increments)
@@ -176,17 +186,17 @@ func FindOptimalMeetingSlots(
 		}
 	}
 
-	// Sort by combined score (conflicts + timezone compatibility)
+	// Sort by conflict percentage first, then by timezone score
 	sort.Slice(meetingSlots, func(i, j int) bool {
-		// Calculate combined score (lower is better)
-		// Weight: 70% for conflicts, 30% for timezone compatibility
-		scoreI := meetingSlots[i].ConflictPercentage*0.7 + (100-meetingSlots[i].TimeZoneScore)*0.3
-		scoreJ := meetingSlots[j].ConflictPercentage*0.7 + (100-meetingSlots[j].TimeZoneScore)*0.3
-
-		if scoreI != scoreJ {
-			return scoreI < scoreJ
+		// Primary sort: fewer conflicts first
+		if meetingSlots[i].ConflictPercentage != meetingSlots[j].ConflictPercentage {
+			return meetingSlots[i].ConflictPercentage < meetingSlots[j].ConflictPercentage
 		}
-		// If scores are equal, prefer earlier times
+		// Secondary sort: better timezone score
+		if meetingSlots[i].TimeZoneScore != meetingSlots[j].TimeZoneScore {
+			return meetingSlots[i].TimeZoneScore > meetingSlots[j].TimeZoneScore
+		}
+		// Tertiary sort: earlier time first
 		return meetingSlots[i].TimeSlot.Start.Before(meetingSlots[j].TimeSlot.Start)
 	})
 
