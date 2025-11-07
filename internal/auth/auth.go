@@ -5,8 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"os"
+	"os/exec"
+	"runtime"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/oauth2"
@@ -29,9 +33,102 @@ func GetClient(config *oauth2.Config) *http.Client {
 
 // Request a token from the web, then returns the retrieved token.
 func getTokenFromWeb(config *oauth2.Config) *oauth2.Token {
+	tok, err := getTokenFromWebWithLocalServer(config)
+	if err != nil {
+		log.Warn().Err(err).Msg("Falling back to manual OAuth flow")
+		return getTokenFromCLI(config)
+	}
+	return tok
+}
+
+func getTokenFromWebWithLocalServer(config *oauth2.Config) (*oauth2.Token, error) {
+	listener, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		return nil, fmt.Errorf("unable to start local callback server: %w", err)
+	}
+	defer listener.Close()
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	redirectURL := fmt.Sprintf("http://localhost:%d/", port)
+	config.RedirectURL = redirectURL
+
+	state := fmt.Sprintf("state-token-%d", time.Now().UnixNano())
+	authURL := config.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.SetAuthURLParam("prompt", "consent"))
+
+	fmt.Printf("\nOpening browser for Google authorization...\nIf it does not open automatically, please visit:\n%v\n\n", authURL)
+	openBrowser(authURL)
+
+	codeCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+
+	srv := &http.Server{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+
+		if e := query.Get("error"); e != "" {
+			message := fmt.Sprintf("Authorization failed: %s", e)
+			http.Error(w, message, http.StatusBadRequest)
+			select {
+			case errCh <- fmt.Errorf("%s", message):
+			default:
+			}
+			return
+		}
+
+		if query.Get("state") != state {
+			http.Error(w, "Invalid state parameter", http.StatusBadRequest)
+			return
+		}
+
+		code := query.Get("code")
+		if code == "" {
+			http.Error(w, "Missing authorization code", http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintln(w, "<html><body><h1>Authentication complete</h1><p>You can close this tab and return to the terminal.</p></body></html>")
+
+		select {
+		case codeCh <- code:
+		default:
+		}
+	})
+	srv.Handler = mux
+
+	go func() {
+		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
+			errCh <- err
+		}
+	}()
+
+	var authCode string
+	select {
+	case authCode = <-codeCh:
+	case err := <-errCh:
+		return nil, err
+	case <-time.After(2 * time.Minute):
+		return nil, fmt.Errorf("timed out waiting for authorization response")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if shutdownErr := srv.Shutdown(ctx); shutdownErr != nil {
+		log.Warn().Err(shutdownErr).Msg("Failed to cleanly shutdown OAuth callback server")
+	}
+
+	tok, err := config.Exchange(context.Background(), authCode)
+	if err != nil {
+		return nil, fmt.Errorf("unable to retrieve token from web: %w", err)
+	}
+
+	return tok, nil
+}
+
+func getTokenFromCLI(config *oauth2.Config) *oauth2.Token {
 	authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
-	fmt.Printf("Go to the following link in your browser then type the "+
-		"authorization code: \n%v\n", authURL)
+	fmt.Printf("Go to the following link in your browser then type the authorization code: \n%v\n", authURL)
 
 	var authCode string
 	if _, err := fmt.Scan(&authCode); err != nil {
@@ -66,6 +163,27 @@ func saveToken(path string, token *oauth2.Token) {
 	}
 	defer f.Close()
 	json.NewEncoder(f).Encode(token)
+}
+
+func openBrowser(url string) {
+	var cmd *exec.Cmd
+
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	case "darwin":
+		cmd = exec.Command("open", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+
+	if cmd == nil {
+		return
+	}
+
+	if err := cmd.Start(); err != nil {
+		log.Warn().Err(err).Str("url", url).Msg("Unable to open browser automatically")
+	}
 }
 
 // GetCalendarService creates and returns a Google Calendar service
