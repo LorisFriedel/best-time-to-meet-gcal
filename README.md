@@ -69,39 +69,64 @@ On first run, the tool will:
 
 ### 5. Additional Setup for Mailing List Support
 
-To use mailing lists/Google Groups, you need additional permissions:
+**⚠️ IMPORTANT: Mailing list support requires ALL of the following to be configured correctly. Missing any one will cause it to fail.**
 
-#### Google Workspace Admin Permissions
+#### Required Setup Checklist
 
-If your organization uses Google Workspace:
+You **MUST** complete all of these steps for mailing lists to work:
 
-1. **Option A: Request Groups Reader Role** (Recommended)
-   - Ask your Google Workspace administrator to grant you the "Groups Reader" role
-   - This allows you to read group membership for all groups in your domain
+1. ✅ **Enable Admin SDK API** (in addition to Calendar API)
+   - Go to Google Cloud Console → APIs & Services → Library
+   - Search for "Admin SDK API" and click "Enable"
+   - This is different from just enabling Calendar API - both must be enabled
 
-2. **Option B: Custom Role**
-   - Your admin can create a custom role with these privileges:
-     - Groups → Read
-     - Organization Units → Read
+2. ✅ **Add Directory Scopes to OAuth Consent Screen**
+   - Go to Google Cloud Console → APIs & Services → OAuth consent screen → Edit
+   - In the Scopes section, add these scopes:
+     - `https://www.googleapis.com/auth/admin.directory.group.member.readonly`
+     - `https://www.googleapis.com/auth/admin.directory.group.readonly`
+   - Save the changes
+
+3. ✅ **Get Google Workspace Admin Permissions** (REQUIRED - OAuth scopes alone are not enough)
+   - You need the "Groups Reader" role in Google Workspace Admin
+   - Ask your Google Workspace administrator to grant you this role
+   - Or have them create a custom role with "Groups → Read" permission
+   - **Personal Gmail accounts cannot read Google Groups membership**
+
+4. ✅ **Re-authenticate After Changes**
+   - Delete your existing token: `rm token.json`
+   - Run the tool again - it will prompt for re-authentication with new scopes
+
+#### Important Limitations
+
+- **200+ Member Groups**: Google Calendar API cannot process groups with more than 200 members in a single request. The tool automatically handles this by batching requests, but you still need proper permissions to read the group members first.
+- **External Groups**: Groups from external domains (e.g., `group@external-company.com`) cannot be resolved - they must be from your Google Workspace domain.
+- **Workspace Required**: Personal Gmail accounts cannot access Google Groups membership - you need a Google Workspace account with proper admin permissions.
 
 #### Common Setup Issues
 
-- **Missing Admin SDK API**: Many users forget to enable the Admin SDK API (not just Calendar API)
-- **Wrong OAuth Scopes**: The OAuth consent screen must include directory scopes, not just calendar
-- **No Workspace Permissions**: Personal Gmail accounts cannot read Google Groups membership
-- **External Groups**: Groups from other organizations cannot be expanded (e.g., `group@external-company.com`)
+If you get "insufficient permissions to read group members", check:
+
+- ❌ **Admin SDK API not enabled** - Most common mistake: only Calendar API is enabled
+- ❌ **OAuth scopes missing** - Directory scopes not added to OAuth consent screen
+- ❌ **No Workspace permissions** - Account doesn't have Groups Reader role
+- ❌ **Token not refreshed** - Need to delete `token.json` and re-authenticate after changes
+- ❌ **External group** - Trying to access a group from another organization
 
 #### Verify Your Setup
 
-After setup, verify everything is configured correctly:
+After completing all steps above, verify:
 
-1. **Check OAuth Scopes**: In Google Cloud Console → APIs & Services → OAuth consent screen → Scopes
+1. **OAuth Scopes**: Google Cloud Console → APIs & Services → OAuth consent screen → Scopes
    - Must include: `admin.directory.group.member.readonly` and `admin.directory.group.readonly`
 
-2. **Check Enabled APIs**: In Google Cloud Console → APIs & Services → Library
-   - Both "Google Calendar API" and "Admin SDK API" must be enabled
+2. **Enabled APIs**: Google Cloud Console → APIs & Services → Library
+   - Both "Google Calendar API" and "Admin SDK API" must show as "Enabled"
 
-3. **Re-authenticate**: After any permission changes
+3. **Workspace Permissions**: Google Admin Console → Account → Admin roles
+   - Your account should have "Groups Reader" role or equivalent
+
+4. **Re-authenticate**: After any changes
    ```bash
    rm token.json
    ./best-time-to-meet --mailing-lists "your-group@company.com" --start "2024-01-15" --end "2024-01-19"
@@ -499,12 +524,17 @@ The tool can automatically resolve Google Groups (mailing lists) to individual m
 
 ### Requirements for Mailing Lists
 
-1. **Google Workspace**: Mailing list resolution requires access to Google Workspace Admin Directory API
-2. **Permissions**: Your Google account needs permission to read group members:
-   - For Google Workspace domains: Request "Groups Reader" role from your admin
-   - OAuth consent screen must include the directory scopes listed above
-3. **APIs Enabled**: Both Calendar API and Admin SDK API must be enabled in Google Cloud Console
-4. **Token Update**: If you previously authenticated without directory scopes, delete `token.json` and re-authenticate
+**⚠️ ALL of the following are REQUIRED - missing any one will cause mailing lists to fail:**
+
+1. **Google Workspace Account**: Personal Gmail accounts cannot read Google Groups membership
+2. **Admin SDK API Enabled**: Must be enabled in Google Cloud Console (in addition to Calendar API)
+3. **OAuth Directory Scopes**: OAuth consent screen must include:
+   - `admin.directory.group.member.readonly`
+   - `admin.directory.group.readonly`
+4. **Google Workspace Admin Permissions**: Your account must have "Groups Reader" role (OAuth scopes alone are NOT sufficient)
+5. **Fresh Authentication**: Delete `token.json` and re-authenticate after adding scopes/permissions
+
+**Note on Large Groups**: Groups with 200+ members are automatically handled via batching, but you still need all the above permissions to read the group members first.
 
 ## Tips for Best Results
 
@@ -544,34 +574,40 @@ The tool can automatically resolve Google Groups (mailing lists) to individual m
 
 #### "insufficient permissions to read group members"
 
-This error means your account cannot read group membership. To fix:
+**This error means ONE or MORE of the required setup steps are missing. ALL must be completed:**
 
-1. **In Google Cloud Console**:
+1. ✅ **Admin SDK API Enabled** (in Google Cloud Console):
    - Go to APIs & Services → Library
-   - Ensure "Admin SDK API" is enabled (not just Calendar API)
-   - Go to OAuth consent screen → Scopes
-   - Verify these scopes are added:
+   - Search "Admin SDK API" and verify it shows "Enabled"
+   - **Most common mistake**: Only Calendar API is enabled, Admin SDK API is missing
+
+2. ✅ **OAuth Directory Scopes Added** (in Google Cloud Console):
+   - Go to APIs & Services → OAuth consent screen → Edit → Scopes
+   - Must include BOTH:
      - `admin.directory.group.member.readonly`
      - `admin.directory.group.readonly`
+   - Save changes
 
-2. **In Google Workspace Admin** (or ask your admin):
-   - Grant yourself the "Groups Reader" role
-   - Or create a custom role with Groups → Read permission
+3. ✅ **Google Workspace Admin Permissions** (REQUIRED - OAuth scopes alone are NOT enough):
+   - Go to Google Admin Console → Account → Admin roles
+   - Your account MUST have "Groups Reader" role
+   - **This is the most commonly missed requirement** - OAuth scopes grant app permissions, but you still need Workspace admin role to actually read groups
+   - If you don't have admin access, ask your IT administrator to grant you this role
 
-3. **Re-authenticate**:
+4. ✅ **Re-authenticate After Changes**:
    ```bash
    rm token.json
    ./best-time-to-meet --mailing-lists "your-group@company.com" --start "2024-01-15" --end "2024-01-19"
    ```
 
-4. **Check API Quotas**:
+5. ✅ **Check API Quotas**:
    - In Google Cloud Console → APIs & Services → Quotas
    - Look for Admin SDK API quotas
    - Ensure you haven't exceeded any limits
 
-If you don't have admin access, you'll need to either:
-- Ask your IT administrator for the necessary permissions
-- Export group members manually and use `--emails` instead
+**If you cannot get Workspace admin permissions:**
+- Export group members manually from Google Groups UI
+- Use `--emails` flag with the exported email addresses instead
 
 #### "Could not resolve mailing list - may be external domain"
 This means the mailing list is from an external organization (e.g., a partner company) or doesn't exist in your Google Workspace domain. 
@@ -583,10 +619,12 @@ This means the mailing list is from an external organization (e.g., a partner co
 
 #### No calendar data available
 If you get "No calendar data could be retrieved for any attendees":
-1. **External groups**: Group email addresses don't have calendars. You need individual member emails.
-2. **Large groups (200+ members)**: Google Calendar API cannot process groups with more than 200 members in a single request. The tool now automatically handles this by batching requests.
-3. **Calendar sharing**: Calendars must be shared with you (at minimum "free/busy" visibility).
-4. **Wrong domain**: Verify the email addresses are from domains you have access to.
+
+1. **Missing permissions**: You may not have completed all required setup steps (see "insufficient permissions" section above)
+2. **External groups**: Group email addresses don't have calendars. You need individual member emails.
+3. **Large groups (200+ members)**: Google Calendar API has a hard limit - it cannot process groups with more than 200 members in a single request. The tool automatically handles this by batching requests, BUT you must first have proper permissions to read the group members via Directory API.
+4. **Calendar sharing**: Calendars must be shared with you (at minimum "free/busy" visibility).
+5. **Wrong domain**: Verify the email addresses are from domains you have access to.
 
 #### Groups not resolving
 Delete `token.json` and re-authenticate to get the new directory scopes.
