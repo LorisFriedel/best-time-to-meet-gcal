@@ -479,13 +479,7 @@ This ensures meetings are scheduled at times that respect everyone's working hou
 
 The tool can automatically resolve Google Groups (mailing lists) to individual members. This is especially useful for scheduling team meetings without having to manually list every team member.
 
-### Requirements for Mailing Lists
-
-1. **Google Workspace**: Mailing list resolution requires access to Google Workspace Admin Directory API
-2. **Permissions**: Your Google account needs permission to read group members:
-   - For Google Workspace domains: Request "Groups Reader" role from your admin
-   - OAuth consent screen must include the directory scopes listed above
-3. **Token Update**: If you previously authenticated without directory scopes, delete `token.json` and re-authenticate
+**⚠️ IMPORTANT: Mailing list support requires ALL setup steps from section 5 above. Without proper Google Workspace permissions, Admin SDK API enabled, and OAuth scopes configured, mailing lists will NOT work.**
 
 ### Mailing List Examples
 
@@ -517,7 +511,7 @@ The tool can automatically resolve Google Groups (mailing lists) to individual m
 
 - The tool automatically handles nested groups (groups within groups)
 - Duplicate members are automatically removed
-- **Large groups (200+ members)**: Automatically processed in batches to work around Google Calendar API limitations
+- **Large groups (200+ members)**: Google Calendar API has a hard limit of 200 calendars per request. Groups with 200+ members are automatically processed in batches, BUT you must first have proper permissions (see Requirements above) to read the group members via Directory API.
 - **External mailing lists**: Groups from external domains (not your Google Workspace) cannot be resolved and have no calendar data
 - When a mailing list can't be resolved, you'll receive a detailed error message with suggestions
 - Use `--batch-size` to adjust the number of calendars processed per API request (default: 50)
