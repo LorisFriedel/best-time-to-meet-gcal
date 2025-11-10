@@ -20,6 +20,14 @@ type UserAvailability struct {
 	Email     string
 	BusySlots []TimeSlot
 	TimeZone  *time.Location // User's calendar timezone
+	Holidays  []Holiday
+}
+
+// Holiday represents an observed public holiday window for a user.
+type Holiday struct {
+	Name     string
+	Region   string
+	TimeSlot TimeSlot
 }
 
 // CalendarAccessResult represents the result of checking calendar access for an email

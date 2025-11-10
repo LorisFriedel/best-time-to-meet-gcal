@@ -178,6 +178,8 @@ After completing all steps above, verify:
   --max-conflicts 30 \                                # Max conflict % to show (default: 100)
   --credentials "credentials.json" \                  # Path to Google credentials
   --debug \                                           # Enable debug logging
+  --include-holidays \                                # Include regional bank holidays (default: true)
+  --holiday-region "alice@example.com=FR,bob@example.com=US" \ # Override holiday regions (ISO-3166 codes)
   --json                                              # Output results in JSON format
 ```
 
@@ -197,7 +199,19 @@ exclude_weekends: true
 max_slots: 10
 max_conflicts: 30
 batch_size: 50  # Number of calendars per API request (for large groups)
+include_holidays: true
+# holiday_region_overrides:
+#   "alice@example.com": "FR"
 ```
+
+### Bank Holidays
+
+When `include_holidays` is enabled (default), the tool automatically blocks out public holidays for each attendee:
+- Regions are inferred from each attendee's Google Calendar timezone using the Rest Countries API.
+- Holiday dates are fetched via the [Nager.Date](https://date.nager.at/) public holiday API.
+- Any attendees on holiday are surfaced separately in the detailed results.
+
+If automatic detection is incorrect, override the region with `--holiday-region email=CC` (ISO-3166 country code) or via `holiday_region_overrides` in your config file. Disable the feature entirely with `--include-holidays=false`.
 
 Then run with fewer command-line arguments:
 
@@ -505,14 +519,27 @@ The tool can automatically resolve Google Groups (mailing lists) to individual m
   --end "2024-01-19" \
   --duration 30 \
   --batch-size 100  # Process 100 calendars per API request
+
+# Nested groups example: engineering@company.com contains subteams like
+# frontend@company.com, backend@company.com, and qa@company.com
+./best-time-to-meet \
+  --mailing-lists "engineering@company.com,product@company.com" \
+  --start "2024-01-15" \
+  --end "2024-01-19"
+# The tool will automatically expand all nested groups and handle any circular references
 ```
 
 ### Notes on Mailing Lists
 
-- The tool automatically handles nested groups (groups within groups)
-- Duplicate members are automatically removed
-- **Large groups (200+ members)**: Google Calendar API has a hard limit of 200 calendars per request. Groups with 200+ members are automatically processed in batches, BUT you must first have proper permissions (see Requirements above) to read the group members via Directory API.
-- **External mailing lists**: Groups from external domains (not your Google Workspace) cannot be resolved and have no calendar data
+- **Nested Groups**: The tool intelligently handles nested groups (mailing lists that contain other mailing lists)
+  - Automatically expands nested groups recursively to find all individual members
+  - Detects and handles circular references (e.g., Group A includes Group B, and Group B includes Group A)
+  - Provides detailed reporting on nesting depth and any issues encountered
+  - Continues processing even if some nested groups fail to resolve
+- **Duplicate Handling**: Members appearing in multiple groups are automatically deduplicated
+- **Large Groups (200+ members)**: Google Calendar API has a hard limit of 200 calendars per request. Groups with 200+ members are automatically processed in batches, BUT you must first have proper permissions (see Requirements above) to read the group members via Directory API.
+- **External Mailing Lists**: Groups from external domains (not your Google Workspace) cannot be resolved and have no calendar data
+- **Partial Resolution**: If some nested groups fail to resolve, the tool will continue with the members it could find and report which groups failed
 - When a mailing list can't be resolved, you'll receive a detailed error message with suggestions
 - Use `--batch-size` to adjust the number of calendars processed per API request (default: 50)
 

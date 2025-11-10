@@ -18,6 +18,9 @@ exclude_weekends: true # Skip Saturday and Sunday
 max_slots: 10          # Number of suggestions to show
 max_conflicts: 30      # Maximum conflict percentage to display (0-100)
 batch_size: 50         # Number of calendars to process per API request (for large groups)
+include_holidays: true # Consider regional bank holidays for attendees
+# holiday_region_overrides:
+#   "user@example.com": "US"  # Override attendee holiday region (ISO-3166 alpha-2 code)
 
 # You can also set default emails here (comma-separated)
 # emails: "user1@example.com,user2@example.com"

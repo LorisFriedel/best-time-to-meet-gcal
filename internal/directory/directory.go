@@ -10,11 +10,16 @@ import (
 
 // ResolutionResult represents the result of resolving a single email/group
 type ResolutionResult struct {
-	OriginalEmail string
-	ResolvedTo    []string
-	IsGroup       bool
-	Error         error
-	ErrorType     string // "external_domain", "permission_denied", "not_found", etc.
+	OriginalEmail    string
+	ResolvedTo       []string
+	IsGroup          bool
+	Error            error
+	ErrorType        string            // "external_domain", "permission_denied", "not_found", etc.
+	NestedGroups     []string          // Groups found within this group
+	ResolutionDepth  int               // How deep the nesting went
+	CircularRef      bool              // True if circular reference was detected
+	PartialFailure   bool              // True if some nested groups failed to resolve
+	FailedNestedGroups map[string]error // Track which nested groups failed
 }
 
 // ResolutionSummary contains details about the mailing list resolution process
@@ -25,6 +30,21 @@ type ResolutionSummary struct {
 	UnresolvedGroups  int
 	ExternalGroups    int
 	IndividualEmails  int
+	MaxDepthReached   int    // Maximum nesting depth encountered
+	CircularRefsFound int    // Number of circular references detected
+	NestedGroupsTotal int    // Total number of nested groups found
+}
+
+// groupResolutionContext tracks state during recursive group resolution
+type groupResolutionContext struct {
+	visitedGroups     map[string]bool   // Track visited groups to detect circular references
+	memberEmails      map[string]bool   // Deduplicated member emails
+	nestedGroups      []string          // All nested groups encountered
+	maxDepth          int               // Maximum depth reached
+	currentPath       []string          // Current path for circular reference detection
+	failedGroups      map[string]error  // Track groups that failed to resolve
+	circularRefs      []string          // Groups involved in circular references
+	hasPartialFailure bool              // True if any nested group failed
 }
 
 // ResolveMemberEmails takes a list of email addresses (which may include group/mailing list addresses)
@@ -72,7 +92,10 @@ func ResolveMemberEmails(service *directory.Service, emails []string) ([]string,
 func ResolveMemberEmailsDetailed(service *directory.Service, emails []string) ([]string, *ResolutionSummary) {
 	memberEmails := make(map[string]bool)
 	summary := &ResolutionSummary{
-		Results: make([]ResolutionResult, 0),
+		Results:           make([]ResolutionResult, 0),
+		MaxDepthReached:   0,
+		CircularRefsFound: 0,
+		NestedGroupsTotal: 0,
 	}
 
 	for _, email := range emails {
@@ -82,12 +105,13 @@ func ResolveMemberEmailsDetailed(service *directory.Service, emails []string) ([
 		}
 
 		result := ResolutionResult{
-			OriginalEmail: email,
-			ResolvedTo:    []string{},
+			OriginalEmail:      email,
+			ResolvedTo:         []string{},
+			FailedNestedGroups: make(map[string]error),
 		}
 
-		// Try to get group members
-		members, err := getGroupMembers(service, email)
+		// Try to get group members with full details
+		members, ctx, err := getGroupMembersWithDetails(service, email)
 		if err != nil {
 			// Analyze the error to determine the type
 			errorType := categorizeError(err)
@@ -105,13 +129,46 @@ func ResolveMemberEmailsDetailed(service *directory.Service, emails []string) ([
 				summary.UnresolvedGroups++
 			}
 		} else if len(members) > 0 {
-			// Successfully resolved group
+			// Successfully resolved group (possibly with partial failures)
 			result.IsGroup = true
 			result.ResolvedTo = members
+			result.NestedGroups = ctx.nestedGroups
+			result.ResolutionDepth = ctx.maxDepth
+			result.PartialFailure = ctx.hasPartialFailure
+			result.FailedNestedGroups = ctx.failedGroups
+			
+			// Check for circular references
+			for _, circRef := range ctx.circularRefs {
+				if circRef == email {
+					result.CircularRef = true
+					break
+				}
+			}
+			
+			// Update summary stats
+			summary.ResolvedGroups++
+			summary.NestedGroupsTotal += len(ctx.nestedGroups)
+			if ctx.maxDepth > summary.MaxDepthReached {
+				summary.MaxDepthReached = ctx.maxDepth
+			}
+			summary.CircularRefsFound += len(ctx.circularRefs)
+			
+			// Add members to overall set
 			for _, member := range members {
 				memberEmails[member] = true
 			}
-			summary.ResolvedGroups++
+			
+			// Log detailed information if there were issues
+			if result.PartialFailure || result.CircularRef {
+				log.Info().
+					Str("group", email).
+					Int("members_found", len(members)).
+					Int("nested_groups", len(ctx.nestedGroups)).
+					Int("failed_groups", len(ctx.failedGroups)).
+					Int("max_depth", ctx.maxDepth).
+					Bool("circular_ref", result.CircularRef).
+					Msg("Group resolved with issues")
+			}
 		} else {
 			// Empty result - treat as individual email
 			result.IsGroup = false
@@ -166,9 +223,71 @@ func categorizeError(err error) string {
 
 // getGroupMembers retrieves all member email addresses for a given group
 func getGroupMembers(service *directory.Service, groupEmail string) ([]string, error) {
-	var members []string
-	pageToken := ""
+	// Create a new context for this resolution
+	ctx := &groupResolutionContext{
+		visitedGroups:     make(map[string]bool),
+		memberEmails:      make(map[string]bool),
+		nestedGroups:      []string{},
+		maxDepth:          0,
+		currentPath:       []string{},
+		failedGroups:      make(map[string]error),
+		circularRefs:      []string{},
+		hasPartialFailure: false,
+	}
 
+	// Start recursive resolution
+	err := getGroupMembersRecursive(service, groupEmail, ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert member emails to slice
+	members := make([]string, 0, len(ctx.memberEmails))
+	for email := range ctx.memberEmails {
+		members = append(members, email)
+	}
+
+	return members, nil
+}
+
+// getGroupMembersRecursive recursively retrieves group members with circular reference detection
+func getGroupMembersRecursive(service *directory.Service, groupEmail string, ctx *groupResolutionContext, depth int) error {
+	// Update max depth
+	if depth > ctx.maxDepth {
+		ctx.maxDepth = depth
+	}
+
+	// Check for circular reference
+	for _, pathEmail := range ctx.currentPath {
+		if pathEmail == groupEmail {
+				log.Warn().
+					Str("group", groupEmail).
+					Strs("path", ctx.currentPath).
+					Msg("Circular reference detected in nested groups")
+			ctx.circularRefs = append(ctx.circularRefs, groupEmail)
+			return nil // Don't error out, just skip this group
+		}
+	}
+
+	// Check if we've already processed this group
+	if ctx.visitedGroups[groupEmail] {
+		log.Debug().
+			Str("group", groupEmail).
+			Int("depth", depth).
+			Msg("Group already processed, skipping")
+		return nil
+	}
+
+	// Mark as visited and add to current path
+	ctx.visitedGroups[groupEmail] = true
+	ctx.currentPath = append(ctx.currentPath, groupEmail)
+	defer func() {
+		// Remove from current path when done
+		ctx.currentPath = ctx.currentPath[:len(ctx.currentPath)-1]
+	}()
+
+	// Fetch group members
+	pageToken := ""
 	for {
 		call := service.Members.List(groupEmail).MaxResults(200)
 		if pageToken != "" {
@@ -177,21 +296,30 @@ func getGroupMembers(service *directory.Service, groupEmail string) ([]string, e
 
 		resp, err := call.Do()
 		if err != nil {
-			return nil, err
+			return fmt.Errorf("failed to list members for group %s: %w", groupEmail, err)
 		}
 
 		for _, member := range resp.Members {
-			// Only add USER type members (not groups within groups)
 			if member.Type == "USER" {
-				members = append(members, member.Email)
+				// Add user email to the set
+				ctx.memberEmails[member.Email] = true
 			} else if member.Type == "GROUP" {
-				// Recursively get members of nested groups
-				nestedMembers, err := getGroupMembers(service, member.Email)
+				// Track nested group
+				ctx.nestedGroups = append(ctx.nestedGroups, member.Email)
+
+				// Recursively process nested group
+				err := getGroupMembersRecursive(service, member.Email, ctx, depth+1)
 				if err != nil {
-					log.Warn().Err(err).Str("nested_group", member.Email).Msg("Could not get members of nested group")
-					continue
+					log.Warn().
+						Err(err).
+						Str("nested_group", member.Email).
+						Str("parent_group", groupEmail).
+						Int("depth", depth+1).
+						Msg("Could not resolve nested group, continuing with other members")
+					ctx.failedGroups[member.Email] = err
+					ctx.hasPartialFailure = true
+					// Continue processing other members even if one nested group fails
 				}
-				members = append(members, nestedMembers...)
 			}
 		}
 
@@ -201,7 +329,36 @@ func getGroupMembers(service *directory.Service, groupEmail string) ([]string, e
 		}
 	}
 
-	return members, nil
+	return nil
+}
+
+// getGroupMembersWithDetails retrieves group members with full resolution details
+func getGroupMembersWithDetails(service *directory.Service, groupEmail string) ([]string, *groupResolutionContext, error) {
+	// Create a new context for this resolution
+	ctx := &groupResolutionContext{
+		visitedGroups:     make(map[string]bool),
+		memberEmails:      make(map[string]bool),
+		nestedGroups:      []string{},
+		maxDepth:          0,
+		currentPath:       []string{},
+		failedGroups:      make(map[string]error),
+		circularRefs:      []string{},
+		hasPartialFailure: false,
+	}
+
+	// Start recursive resolution
+	err := getGroupMembersRecursive(service, groupEmail, ctx, 0)
+	if err != nil {
+		return nil, ctx, err
+	}
+
+	// Convert member emails to slice
+	members := make([]string, 0, len(ctx.memberEmails))
+	for email := range ctx.memberEmails {
+		members = append(members, email)
+	}
+
+	return members, ctx, nil
 }
 
 // CheckGroupAccess verifies if the service account has access to read group members

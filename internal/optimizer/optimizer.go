@@ -16,7 +16,8 @@ type MeetingSlot struct {
 	ConflictPercentage  float64
 	TimeZoneScore       float64             // Score indicating how well the time works across timezones (0-100, higher is better)
 	OutsideWorkingHours map[string]bool     // Email -> true if outside their working hours
-	ConflictsByType     map[string][]string // Type -> list of emails (types: "calendar", "working_hours")
+	ConflictsByType     map[string][]string // Type -> list of emails (types: "calendar", "working_hours", "holiday")
+	HolidayConflicts    map[string]string   // Email -> holiday name
 }
 
 // FindOptimalMeetingSlots finds the best meeting times based on availability (legacy version)
@@ -72,6 +73,7 @@ func findOptimalMeetingSlotsLegacy(
 				AvailableEmails:    available,
 				ConflictPercentage: conflictPercentage,
 				ConflictsByType:    map[string][]string{"calendar": unavailable},
+				HolidayConflicts:   map[string]string{},
 			})
 
 			// Move to next slot (30-minute increments)
@@ -120,33 +122,46 @@ func FindOptimalMeetingSlots(
 			conflictsByType := map[string][]string{
 				"calendar":      {},
 				"working_hours": {},
+				"holiday":       {},
 			}
+			holidayConflicts := make(map[string]string)
 
 			for _, userAvail := range availabilities {
 				isUnavailable := false
 				conflictType := ""
+				var conflictHolidayName string
 
-				// First check if it's within their working hours (only if we have timezone info)
-				if userAvail.TimeZone != nil && !isWithinWorkingHours(currentStart, meetingEnd, userAvail.TimeZone, workingHours) {
+				// Check if the slot overlaps with a bank holiday for this attendee
+				if holiday, ok := overlapsHoliday(currentStart, meetingEnd, userAvail.Holidays); ok {
 					isUnavailable = true
-					conflictType = "working_hours"
-					outsideWorkingHours[userAvail.Email] = true
-				}
+					conflictType = "holiday"
+					conflictHolidayName = holiday.Name
+				} else {
+					// Check if it's within their working hours (only if we have timezone info)
+					if userAvail.TimeZone != nil && !isWithinWorkingHours(currentStart, meetingEnd, userAvail.TimeZone, workingHours) {
+						isUnavailable = true
+						conflictType = "working_hours"
+						outsideWorkingHours[userAvail.Email] = true
+					}
 
-				// Then check calendar conflicts (only if not already unavailable due to working hours)
-				if !isUnavailable {
-					for _, busySlot := range userAvail.BusySlots {
-						// Check if the meeting overlaps with this busy slot
-						if overlaps(currentStart, meetingEnd, busySlot.Start, busySlot.End) {
-							isUnavailable = true
-							conflictType = "calendar"
-							break
+					// Then check calendar conflicts (only if not already unavailable due to working hours)
+					if !isUnavailable {
+						for _, busySlot := range userAvail.BusySlots {
+							// Check if the meeting overlaps with this busy slot
+							if overlaps(currentStart, meetingEnd, busySlot.Start, busySlot.End) {
+								isUnavailable = true
+								conflictType = "calendar"
+								break
+							}
 						}
 					}
 				}
 
 				if isUnavailable {
 					unavailable = append(unavailable, userAvail.Email)
+					if conflictType == "holiday" && conflictHolidayName != "" {
+						holidayConflicts[userAvail.Email] = conflictHolidayName
+					}
 					conflictsByType[conflictType] = append(conflictsByType[conflictType], userAvail.Email)
 				} else {
 					available = append(available, userAvail.Email)
@@ -179,6 +194,7 @@ func FindOptimalMeetingSlots(
 				TimeZoneScore:       timezoneScore,
 				OutsideWorkingHours: outsideWorkingHours,
 				ConflictsByType:     conflictsByType,
+				HolidayConflicts:    holidayConflicts,
 			})
 
 			// Move to next slot (30-minute increments)
@@ -262,6 +278,16 @@ func isWithinWorkingHours(start, end time.Time, userTZ *time.Location, config Wo
 // overlaps checks if two time ranges overlap
 func overlaps(start1, end1, start2, end2 time.Time) bool {
 	return start1.Before(end2) && end1.After(start2)
+}
+
+func overlapsHoliday(start, end time.Time, holidays []calendar.Holiday) (*calendar.Holiday, bool) {
+	for i := range holidays {
+		holiday := &holidays[i]
+		if overlaps(start, end, holiday.TimeSlot.Start, holiday.TimeSlot.End) {
+			return holiday, true
+		}
+	}
+	return nil, false
 }
 
 // FilterSlotsByThreshold filters slots to only include those below a conflict threshold

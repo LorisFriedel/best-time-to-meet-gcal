@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/LorisFriedel/find-best-meeting-time-google/internal/auth"
 	"github.com/LorisFriedel/find-best-meeting-time-google/internal/calendar"
 	"github.com/LorisFriedel/find-best-meeting-time-google/internal/directory"
+	"github.com/LorisFriedel/find-best-meeting-time-google/internal/holidays"
 	"github.com/LorisFriedel/find-best-meeting-time-google/internal/logger"
 	"github.com/LorisFriedel/find-best-meeting-time-google/internal/optimizer"
 	"github.com/rs/zerolog/log"
@@ -19,24 +21,26 @@ import (
 )
 
 var (
-	cfgFile         string
-	credentialsFile string
-	emails          string
-	mailingLists    string
-	startDate       string
-	endDate         string
-	duration        int
-	startHour       int
-	endHour         int
-	lunchStartHour  int
-	lunchEndHour    int
-	timezone        string
-	maxSlots        int
-	excludeWeekends bool
-	maxConflicts    float64
-	debug           bool
-	jsonOutput      bool
-	batchSize       int
+	cfgFile          string
+	credentialsFile  string
+	emails           string
+	mailingLists     string
+	startDate        string
+	endDate          string
+	duration         int
+	startHour        int
+	endHour          int
+	lunchStartHour   int
+	lunchEndHour     int
+	timezone         string
+	maxSlots         int
+	excludeWeekends  bool
+	maxConflicts     float64
+	debug            bool
+	jsonOutput       bool
+	batchSize        int
+	includeHolidays  bool
+	holidayOverrides map[string]string
 )
 
 // JSONOutput represents the complete output in JSON format
@@ -113,6 +117,7 @@ type DetailedTimeSlot struct {
 	AvailableEmails    []string            `json:"available_emails"`
 	TimeZoneScore      float64             `json:"timezone_score"`
 	ConflictsByType    map[string][]string `json:"conflicts_by_type"`
+	HolidayConflicts   map[string]string   `json:"holiday_conflicts,omitempty"`
 }
 
 // RecommendationSlot contains the recommended meeting slot
@@ -123,6 +128,7 @@ type RecommendationSlot struct {
 	UnavailableCount      int     `json:"unavailable_count"`
 	CalendarConflicts     int     `json:"calendar_conflicts"`
 	WorkingHoursConflicts int     `json:"working_hours_conflicts"`
+	HolidayConflicts      int     `json:"holiday_conflicts"`
 	Reason                string  `json:"reason"`
 }
 
@@ -164,6 +170,8 @@ func init() {
 	rootCmd.Flags().BoolVar(&debug, "debug", false, "Enable debug logging")
 	rootCmd.Flags().BoolVar(&jsonOutput, "json", false, "Output results in JSON format")
 	rootCmd.Flags().IntVar(&batchSize, "batch-size", 50, "Number of calendars to process per API request (for large groups)")
+	rootCmd.Flags().BoolVar(&includeHolidays, "include-holidays", true, "Consider regional bank holidays when computing availability")
+	rootCmd.Flags().StringToStringVar(&holidayOverrides, "holiday-region", nil, "Override the bank holiday region for attendees (email=ISO code)")
 
 	// At least one of emails or mailing-lists is required
 	rootCmd.MarkFlagRequired("start")
@@ -187,6 +195,8 @@ func init() {
 	viper.BindPFlag("debug", rootCmd.Flags().Lookup("debug"))
 	viper.BindPFlag("json_output", rootCmd.Flags().Lookup("json"))
 	viper.BindPFlag("batch_size", rootCmd.Flags().Lookup("batch-size"))
+	viper.BindPFlag("include_holidays", rootCmd.Flags().Lookup("include-holidays"))
+	viper.BindPFlag("holiday_region_overrides", rootCmd.Flags().Lookup("holiday-region"))
 }
 
 func initConfig() {
@@ -267,7 +277,60 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 						log.Info().
 							Int("resolved_groups", resolutionSummary.ResolvedGroups).
 							Int("total_members", len(resolvedEmails)).
+							Int("max_nesting_depth", resolutionSummary.MaxDepthReached).
+							Int("nested_groups_total", resolutionSummary.NestedGroupsTotal).
 							Msg("Successfully resolved mailing lists")
+					}
+
+					// Report on nested group complexity
+					if resolutionSummary.NestedGroupsTotal > 0 {
+						log.Info().
+							Int("nested_groups", resolutionSummary.NestedGroupsTotal).
+							Int("max_depth", resolutionSummary.MaxDepthReached).
+							Msg("Found nested mailing lists")
+					}
+
+					// Warn about circular references
+					if resolutionSummary.CircularRefsFound > 0 {
+						log.Warn().
+							Int("circular_refs", resolutionSummary.CircularRefsFound).
+							Msg("Circular references detected and handled")
+						
+						// Show which groups had circular references
+						for _, result := range resolutionSummary.Results {
+							if result.CircularRef {
+								log.Warn().
+									Str("group", result.OriginalEmail).
+									Msg("⚠️  Group involved in circular reference")
+							}
+						}
+					}
+
+					// Report on partial failures
+					hasPartialFailures := false
+					for _, result := range resolutionSummary.Results {
+						if result.PartialFailure && result.IsGroup {
+							hasPartialFailures = true
+							log.Warn().
+								Str("group", result.OriginalEmail).
+								Int("failed_nested_groups", len(result.FailedNestedGroups)).
+								Int("resolved_members", len(result.ResolvedTo)).
+								Msg("⚠️  Group partially resolved - some nested groups failed")
+							
+							// Show which nested groups failed
+							for failedGroup, failErr := range result.FailedNestedGroups {
+								log.Warn().
+									Str("nested_group", failedGroup).
+									Str("parent_group", result.OriginalEmail).
+									Err(failErr).
+									Msg("   Failed to resolve nested group")
+							}
+						}
+					}
+
+					if hasPartialFailures {
+						fmt.Fprintf(os.Stderr, "\n⚠️  Some nested mailing lists could not be fully resolved.\n")
+						fmt.Fprintf(os.Stderr, "   The tool will use the members it could find, but the list may be incomplete.\n\n")
 					}
 
 					// Warn about unresolved groups
@@ -419,6 +482,37 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 		fmt.Fprintf(os.Stderr, "\n⚠️  Results are based only on %d out of %d requested attendees.\n",
 			len(availabilities), len(emailList))
 		fmt.Fprintf(os.Stderr, "   Missing calendar data for: %v\n\n", missingCalendars)
+	}
+
+	// Enrich attendee availability with public holidays if requested
+	if viper.GetBool("include_holidays") {
+		overrideMap := make(map[string]string)
+
+		for email, region := range viper.GetStringMapString("holiday_region_overrides") {
+			email = strings.ToLower(strings.TrimSpace(email))
+			region = strings.ToUpper(strings.TrimSpace(region))
+			if email != "" && region != "" {
+				overrideMap[email] = region
+			}
+		}
+
+		for email, region := range holidayOverrides {
+			email = strings.ToLower(strings.TrimSpace(email))
+			region = strings.ToUpper(strings.TrimSpace(region))
+			if email != "" && region != "" {
+				overrideMap[email] = region
+			}
+		}
+
+		ctx := cmd.Context()
+		if ctx == nil {
+			ctx = context.Background()
+		}
+
+		holidayService := holidays.NewService(nil, overrideMap)
+		if err := holidayService.Augment(ctx, availabilities, startTime, endTime); err != nil {
+			log.Warn().Err(err).Msg("Some bank holiday lookups failed")
+		}
 	}
 
 	// Get potential meeting slots (working hours)
@@ -674,6 +768,19 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 					len(slot.ConflictsByType["working_hours"]),
 					strings.Join(slot.ConflictsByType["working_hours"], ", "))
 			}
+			if len(slot.ConflictsByType["holiday"]) > 0 {
+				var holidayDetails []string
+				for _, email := range slot.ConflictsByType["holiday"] {
+					if name, ok := slot.HolidayConflicts[email]; ok && name != "" {
+						holidayDetails = append(holidayDetails, fmt.Sprintf("%s (%s)", email, name))
+					} else {
+						holidayDetails = append(holidayDetails, email)
+					}
+				}
+				fmt.Printf("   🎉 Bank holidays (%d): %s\n",
+					len(slot.ConflictsByType["holiday"]),
+					strings.Join(holidayDetails, ", "))
+			}
 		}
 	}
 
@@ -726,6 +833,9 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 			}
 			if len(bestSlot.ConflictsByType["working_hours"]) > 0 {
 				fmt.Printf("   - Outside working hours: %d attendee(s)\n", len(bestSlot.ConflictsByType["working_hours"]))
+			}
+			if len(bestSlot.ConflictsByType["holiday"]) > 0 {
+				fmt.Printf("   - Bank holidays: %d attendee(s)\n", len(bestSlot.ConflictsByType["holiday"]))
 			}
 
 			// If this matches what we showed in the GOOD OPTIONS section, mention it
@@ -874,6 +984,7 @@ func outputJSON(availabilities []calendar.UserAvailability, filteredSlots []opti
 			AvailableEmails:    slot.AvailableEmails,
 			TimeZoneScore:      slot.TimeZoneScore,
 			ConflictsByType:    slot.ConflictsByType,
+			HolidayConflicts:   slot.HolidayConflicts,
 		})
 	}
 
@@ -911,6 +1022,7 @@ func outputJSON(availabilities []calendar.UserAvailability, filteredSlots []opti
 			UnavailableCount:      bestSlot.UnavailableCount,
 			CalendarConflicts:     len(bestSlot.ConflictsByType["calendar"]),
 			WorkingHoursConflicts: len(bestSlot.ConflictsByType["working_hours"]),
+			HolidayConflicts:      len(bestSlot.ConflictsByType["holiday"]),
 			Reason:                reason,
 		}
 	}
