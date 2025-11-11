@@ -187,6 +187,13 @@ func (s *Service) lookupRegion(ctx context.Context, email string, loc *time.Loca
 	}
 	s.mutex.Unlock()
 
+	if code, ok := mapRegionForTimezone(timezone); ok {
+		s.mutex.Lock()
+		s.tzRegionCache[timezone] = code
+		s.mutex.Unlock()
+		return code, nil
+	}
+
 	code, err := s.fetchRegionForTimezone(ctx, timezone)
 	if err != nil {
 		return "", err
@@ -319,4 +326,17 @@ func (s *Service) ensureTimeout(ctx context.Context) (context.Context, context.C
 		return ctx, func() {}
 	}
 	return context.WithTimeout(ctx, s.requestTimeout)
+}
+
+func mapRegionForTimezone(timezone string) (string, bool) {
+	if timezone == "" {
+		return "", false
+	}
+
+	codes, ok := timezoneToRegions[timezone]
+	if !ok || len(codes) == 0 {
+		return "", false
+	}
+
+	return codes[0], true
 }

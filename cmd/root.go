@@ -262,102 +262,136 @@ func runFindMeetingTime(cmd *cobra.Command, args []string) {
 				allEmails = append(allEmails, mailingListsClean...)
 			} else {
 				// Check if we have proper access
-				if err := directory.CheckGroupAccess(directoryService); err != nil {
-					log.Warn().Err(err).Msg("Group access check failed")
-					log.Warn().Msg("Treating mailing lists as individual emails")
-					allEmails = append(allEmails, mailingListsClean...)
+				if err := directory.CheckGroupAccess(directoryService, mailingListsClean); err != nil {
+					log.Warn().Err(err).Msg("Group access check failed; attempting best-effort resolution anyway")
+				}
+
+				// Resolve mailing list members with detailed information
+				log.Info().Msg("Resolving mailing lists...")
+				var resolvedEmails []string
+				resolvedEmails, resolutionSummary = directory.ResolveMemberEmailsDetailed(directoryService, mailingListsClean)
+
+				// Provide overall debug summary
+				log.Debug().
+					Int("requested_groups", len(mailingListsClean)).
+					Int("groups_processed", len(resolutionSummary.Results)).
+					Int("groups_resolved", resolutionSummary.ResolvedGroups).
+					Int("groups_unresolved", resolutionSummary.UnresolvedGroups).
+					Int("individual_fallbacks", resolutionSummary.IndividualEmails).
+					Int("unique_members", len(resolvedEmails)).
+					Msg("Mailing list resolution summary")
+
+				// Report on resolution results
+				if resolutionSummary.ResolvedGroups > 0 {
+					log.Info().
+						Int("resolved_groups", resolutionSummary.ResolvedGroups).
+						Int("total_members", len(resolvedEmails)).
+						Int("max_nesting_depth", resolutionSummary.MaxDepthReached).
+						Int("nested_groups_total", resolutionSummary.NestedGroupsTotal).
+						Msg("Successfully resolved mailing lists")
 				} else {
-					// Resolve mailing list members with detailed information
-					log.Info().Msg("Resolving mailing lists...")
-					var resolvedEmails []string
-					resolvedEmails, resolutionSummary = directory.ResolveMemberEmailsDetailed(directoryService, mailingListsClean)
+					log.Debug().
+						Int("groups_processed", len(resolutionSummary.Results)).
+						Int("unique_members", len(resolvedEmails)).
+						Msg("Mailing list resolution produced no group expansions")
+				}
 
-					// Report on resolution results
-					if resolutionSummary.ResolvedGroups > 0 {
-						log.Info().
-							Int("resolved_groups", resolutionSummary.ResolvedGroups).
-							Int("total_members", len(resolvedEmails)).
-							Int("max_nesting_depth", resolutionSummary.MaxDepthReached).
-							Int("nested_groups_total", resolutionSummary.NestedGroupsTotal).
-							Msg("Successfully resolved mailing lists")
-					}
+				// Report on nested group complexity
+				if resolutionSummary.NestedGroupsTotal > 0 {
+					log.Info().
+						Int("nested_groups", resolutionSummary.NestedGroupsTotal).
+						Int("max_depth", resolutionSummary.MaxDepthReached).
+						Msg("Found nested mailing lists")
+				}
 
-					// Report on nested group complexity
-					if resolutionSummary.NestedGroupsTotal > 0 {
-						log.Info().
-							Int("nested_groups", resolutionSummary.NestedGroupsTotal).
-							Int("max_depth", resolutionSummary.MaxDepthReached).
-							Msg("Found nested mailing lists")
-					}
+				// Warn about circular references
+				if resolutionSummary.CircularRefsFound > 0 {
+					log.Warn().
+						Int("circular_refs", resolutionSummary.CircularRefsFound).
+						Msg("Circular references detected and handled")
 
-					// Warn about circular references
-					if resolutionSummary.CircularRefsFound > 0 {
-						log.Warn().
-							Int("circular_refs", resolutionSummary.CircularRefsFound).
-							Msg("Circular references detected and handled")
-						
-						// Show which groups had circular references
-						for _, result := range resolutionSummary.Results {
-							if result.CircularRef {
-								log.Warn().
-									Str("group", result.OriginalEmail).
-									Msg("⚠️  Group involved in circular reference")
-							}
-						}
-					}
-
-					// Report on partial failures
-					hasPartialFailures := false
+					// Show which groups had circular references
 					for _, result := range resolutionSummary.Results {
-						if result.PartialFailure && result.IsGroup {
-							hasPartialFailures = true
+						if result.CircularRef {
 							log.Warn().
 								Str("group", result.OriginalEmail).
-								Int("failed_nested_groups", len(result.FailedNestedGroups)).
-								Int("resolved_members", len(result.ResolvedTo)).
-								Msg("⚠️  Group partially resolved - some nested groups failed")
-							
-							// Show which nested groups failed
-							for failedGroup, failErr := range result.FailedNestedGroups {
-								log.Warn().
-									Str("nested_group", failedGroup).
-									Str("parent_group", result.OriginalEmail).
-									Err(failErr).
-									Msg("   Failed to resolve nested group")
-							}
+								Msg("⚠️  Group involved in circular reference")
 						}
 					}
-
-					if hasPartialFailures {
-						fmt.Fprintf(os.Stderr, "\n⚠️  Some nested mailing lists could not be fully resolved.\n")
-						fmt.Fprintf(os.Stderr, "   The tool will use the members it could find, but the list may be incomplete.\n\n")
-					}
-
-					// Warn about unresolved groups
-					if resolutionSummary.UnresolvedGroups > 0 {
-						log.Warn().
-							Int("unresolved_groups", resolutionSummary.UnresolvedGroups).
-							Msg("Some mailing lists could not be resolved")
-
-						// Show details for each unresolved group
-						for _, result := range resolutionSummary.Results {
-							if result.Error != nil {
-								if result.ErrorType == "external_domain" || result.ErrorType == "not_found" {
-									log.Warn().
-										Str("email", result.OriginalEmail).
-										Str("reason", "external domain or not found").
-										Msg("❌ Could not resolve mailing list - may be external domain")
-									fmt.Fprintf(os.Stderr, "\n⚠️  Mailing list '%s' could not be resolved.\n", result.OriginalEmail)
-									fmt.Fprintf(os.Stderr, "   This appears to be an external mailing list or doesn't exist in your domain.\n")
-									fmt.Fprintf(os.Stderr, "   The tool will attempt to use it as an individual email, but group emails don't have calendars.\n")
-									fmt.Fprintf(os.Stderr, "   Note: Google Calendar cannot expand groups with more than 200 members.\n\n")
-								}
-							}
-						}
-					}
-
-					allEmails = append(allEmails, resolvedEmails...)
 				}
+
+				// Provide per-group debug details when debug logging is enabled
+				for _, result := range resolutionSummary.Results {
+					if result.IsGroup {
+						log.Debug().
+							Str("group", result.OriginalEmail).
+							Int("members_resolved", len(result.ResolvedTo)).
+							Int("nested_groups", len(result.NestedGroups)).
+							Int("failed_nested_groups", len(result.FailedNestedGroups)).
+							Bool("partial_failure", result.PartialFailure).
+							Bool("circular_ref", result.CircularRef).
+							Msg("Mailing list resolved")
+					} else if result.Error != nil {
+						log.Debug().
+							Str("email", result.OriginalEmail).
+							Str("error_type", result.ErrorType).
+							Int("members_resolved", len(result.ResolvedTo)).
+							Err(result.Error).
+							Msg("Mailing list resolution failed")
+					}
+				}
+
+				// Report on partial failures
+				hasPartialFailures := false
+				for _, result := range resolutionSummary.Results {
+					if result.PartialFailure && result.IsGroup {
+						hasPartialFailures = true
+						log.Warn().
+							Str("group", result.OriginalEmail).
+							Int("failed_nested_groups", len(result.FailedNestedGroups)).
+							Int("resolved_members", len(result.ResolvedTo)).
+							Msg("⚠️  Group partially resolved - some nested groups failed")
+
+						// Show which nested groups failed
+						for failedGroup, failErr := range result.FailedNestedGroups {
+							log.Warn().
+								Str("nested_group", failedGroup).
+								Str("parent_group", result.OriginalEmail).
+								Err(failErr).
+								Msg("   Failed to resolve nested group")
+						}
+					}
+				}
+
+				if hasPartialFailures {
+					fmt.Fprintf(os.Stderr, "\n⚠️  Some nested mailing lists could not be fully resolved.\n")
+					fmt.Fprintf(os.Stderr, "   The tool will use the members it could find, but the list may be incomplete.\n\n")
+				}
+
+				// Warn about unresolved groups
+				if resolutionSummary.UnresolvedGroups > 0 {
+					log.Warn().
+						Int("unresolved_groups", resolutionSummary.UnresolvedGroups).
+						Msg("Some mailing lists could not be resolved")
+
+					// Show details for each unresolved group
+					for _, result := range resolutionSummary.Results {
+						if result.Error != nil {
+							if result.ErrorType == "external_domain" || result.ErrorType == "not_found" {
+								log.Warn().
+									Str("email", result.OriginalEmail).
+									Str("reason", "external domain or not found").
+									Msg("❌ Could not resolve mailing list - may be external domain")
+								fmt.Fprintf(os.Stderr, "\n⚠️  Mailing list '%s' could not be resolved.\n", result.OriginalEmail)
+								fmt.Fprintf(os.Stderr, "   This appears to be an external mailing list or doesn't exist in your domain.\n")
+								fmt.Fprintf(os.Stderr, "   The tool will attempt to use it as an individual email, but group emails don't have calendars.\n")
+								fmt.Fprintf(os.Stderr, "   Note: Google Calendar cannot expand groups with more than 200 members.\n\n")
+							}
+						}
+					}
+				}
+
+				allEmails = append(allEmails, resolvedEmails...)
 			}
 		}
 	}
